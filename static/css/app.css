@@ -230,6 +230,18 @@ code {
   transition: background 0.15s;
 }
 
+.bc-btn-sm-success {
+  background-color: var(--success);
+  border-color: var(--success);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.25rem 0.65rem;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
 .bc-btn-sm-primary:hover {
   background-color: var(--accent-hover);
   border-color: var(--accent-hover);

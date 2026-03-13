@@ -58,3 +58,17 @@
   <div class="col-12" id="nzb-results"></div>
 </div>
 {% endblock %}
+
+{% block extra_js %}
+<script>
+  // After HTMX loads post-detail or nzb-results, scroll smoothly into view
+  document.body.addEventListener('htmx:afterSwap', function(evt) {
+    var id = evt.detail.target.id;
+    if (id === 'post-detail' || id === 'nzb-results') {
+      setTimeout(function() {
+        evt.detail.target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 50);
+    }
+  });
+</script>
+{% endblock %}

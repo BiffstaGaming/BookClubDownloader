@@ -2,8 +2,15 @@
   <div class="bc-card-header d-flex align-items-center gap-3">
     <span class="step-badge">2</span>
     <span>Forum Results
-      <span class="badge bc-badge-muted ms-2">{{ results | length }} found</span>
+      <span class="badge bc-badge-muted ms-2" id="results-count">{{ results | length }} found</span>
     </span>
+    <button
+      id="show-all-btn"
+      class="btn bc-btn-outline btn-sm ms-auto d-none"
+      onclick="showAllForumResults()"
+    >
+      <i class="bi bi-list me-1"></i>Show all {{ results | length }} results
+    </button>
   </div>
   <div class="bc-card-body p-0">
     {% if results %}
@@ -15,9 +22,9 @@
             <th class="text-end" style="width:130px;">Action</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="forum-results-tbody">
           {% for result in results %}
-          <tr>
+          <tr data-topic-id="{{ result.topic_id }}">
             <td>
               <span class="fw-semibold text-primary-light">{{ result.title }}</span>
               <div class="text-muted small">Topic #{{ result.topic_id }}</div>
@@ -29,6 +36,7 @@
                 hx-target="#post-detail"
                 hx-swap="innerHTML"
                 hx-indicator=".htmx-indicator"
+                onclick="selectForumResult(this)"
               >
                 <i class="bi bi-eye me-1"></i>View Post
               </button>
@@ -46,3 +54,42 @@
     {% endif %}
   </div>
 </div>
+
+<script>
+function selectForumResult(btn) {
+  const selectedRow = btn.closest('tr');
+  const tbody = document.getElementById('forum-results-tbody');
+
+  // Hide all other rows
+  tbody.querySelectorAll('tr').forEach(function(row) {
+    if (row !== selectedRow) row.classList.add('d-none');
+  });
+
+  // Mark the selected button as active
+  btn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>Selected';
+  btn.classList.replace('bc-btn-sm-primary', 'bc-btn-sm-success');
+  btn.disabled = true;
+
+  // Show the "show all" toggle
+  document.getElementById('show-all-btn').classList.remove('d-none');
+}
+
+function showAllForumResults() {
+  const tbody = document.getElementById('forum-results-tbody');
+
+  // Show all rows
+  tbody.querySelectorAll('tr').forEach(function(row) {
+    row.classList.remove('d-none');
+  });
+
+  // Reset all buttons back to "View Post"
+  tbody.querySelectorAll('button').forEach(function(btn) {
+    btn.innerHTML = '<i class="bi bi-eye me-1"></i>View Post';
+    btn.classList.replace('bc-btn-sm-success', 'bc-btn-sm-primary');
+    btn.disabled = false;
+  });
+
+  // Hide the toggle
+  document.getElementById('show-all-btn').classList.add('d-none');
+}
+</script>
