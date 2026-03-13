@@ -1,6 +1,7 @@
 import re
+import hashlib
 import logging
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
@@ -23,29 +24,85 @@ class AbookScraper:
         })
 
     def login(self) -> bool:
-        """POST to the forum login endpoint and verify login succeeded."""
+        """
+        SMF login with client-side password hashing.
+        1. GET the login page to extract hidden CSRF token fields.
+        2. Compute hash_passwrd = SHA1(SHA1(password) + token_value[:32])
+        3. POST with empty passwrd and the hashed value.
+        """
         try:
-            login_url = f"{self.base_url}?action=login2"
+            # Step 1: fetch login page to get hidden token fields
+            login_page = self.session.get(
+                f"{self.base_url}?action=login", timeout=30, allow_redirects=True
+            )
+            login_page.raise_for_status()
+            soup = BeautifulSoup(login_page.text, "lxml")
+
+            # Find the login form
+            form = soup.find("form", id=re.compile(r"login", re.I)) or \
+                   soup.find("form", action=re.compile(r"login2", re.I))
+
+            # Collect all hidden fields (CSRF tokens etc.)
+            hidden_fields = {}
+            if form:
+                for inp in form.find_all("input", type="hidden"):
+                    name = inp.get("name")
+                    value = inp.get("value", "")
+                    if name:
+                        hidden_fields[name] = value
+
+            # Find the session/form token — SMF uses a random field name whose
+            # value is a 32-char hex string
+            token_value = ""
+            for val in hidden_fields.values():
+                if re.fullmatch(r"[0-9a-f]{32}", val):
+                    token_value = val
+                    break
+
+            # Step 2: compute SMF's client-side hash
+            # hash_passwrd = SHA1( SHA1(password) + token_value[:32] )
+            if token_value:
+                inner = hashlib.sha1(self.password.encode("utf-8")).hexdigest()
+                hash_passwrd = hashlib.sha1(
+                    (inner + token_value[:32]).encode("utf-8")
+                ).hexdigest()
+            else:
+                # Fallback: some older SMF installs just use SHA1(password)
+                logger.warning("AbookScraper: no token found, using plain SHA1 hash")
+                hash_passwrd = hashlib.sha1(self.password.encode("utf-8")).hexdigest()
+
+            # Step 3: build and POST the login form
             data = {
+                **hidden_fields,
                 "user": self.username,
-                "passwrd": self.password,
-                "cookieneverexp": "1",
+                "passwrd": "",           # intentionally empty — JS clears it
+                "hash_passwrd": hash_passwrd,
+                "cookieneverexp": "on",
             }
-            response = self.session.post(login_url, data=data, timeout=30, allow_redirects=True)
+
+            response = self.session.post(
+                f"{self.base_url}?action=login2",
+                data=data,
+                timeout=30,
+                allow_redirects=True,
+            )
             response.raise_for_status()
-            # Check if the username appears in the response (typical SMF indicator)
+
+            # A logout link in the page means we're authenticated
+            if "action=logout" in response.text or "logout" in response.text.lower():
+                self._logged_in = True
+                logger.info("AbookScraper: login successful for %s", self.username)
+                return True
+
             if self.username.lower() in response.text.lower():
                 self._logged_in = True
                 logger.info("AbookScraper: login successful for %s", self.username)
                 return True
-            # Some SMF forums redirect back to board index on success — check for logout link
-            if "logout" in response.text.lower() or "action=logout" in response.text.lower():
-                self._logged_in = True
-                logger.info("AbookScraper: login successful (logout link found)")
-                return True
-            logger.warning("AbookScraper: login may have failed — username not found in response")
+
+            logger.warning("AbookScraper: login failed — no logout link or username in response")
             self._logged_in = False
             return False
+
         except requests.RequestException as exc:
             logger.error("AbookScraper: login request failed: %s", exc)
             self._logged_in = False
