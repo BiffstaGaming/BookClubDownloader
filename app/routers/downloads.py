@@ -62,7 +62,7 @@ async def send_to_nzbget(
         )
 
     # Step 2: Send to NZBGet
-    safe_name = _sanitize_filename(nzb_title or search_term or nzb_hash)
+    safe_name = _sanitize_filename(post_title or nzb_title or search_term or nzb_hash)
     try:
         client = NzbgetClient(nzbget_url, nzbget_username, nzbget_password)
         job_id = client.add_nzb(
