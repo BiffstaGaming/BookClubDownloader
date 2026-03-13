@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Setting
+from app.scrapers.abook import AbookScraper
 from app.services.nzbget import NzbgetClient
 
 logger = logging.getLogger(__name__)
@@ -87,10 +88,20 @@ async def save_settings(
 
 
 @router.post("/test-nzbget", response_class=HTMLResponse)
-async def test_nzbget(request: Request, db: Session = Depends(get_db)):
-    nzbget_url = get_setting(db, "nzbget_url")
-    nzbget_username = get_setting(db, "nzbget_username")
-    nzbget_password = get_setting(db, "nzbget_password")
+async def test_nzbget(
+    request: Request,
+    nzbget_url: str = Form(default=""),
+    nzbget_username: str = Form(default=""),
+    nzbget_password: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    # Use form values if provided, fall back to DB
+    if not nzbget_url:
+        nzbget_url = get_setting(db, "nzbget_url")
+    if not nzbget_username:
+        nzbget_username = get_setting(db, "nzbget_username")
+    if not nzbget_password:
+        nzbget_password = get_setting(db, "nzbget_password")
 
     if not nzbget_url:
         return HTMLResponse(
@@ -113,6 +124,48 @@ async def test_nzbget(request: Request, db: Session = Depends(get_db)):
             )
     except Exception as exc:
         logger.error("NZBGet connection test error: %s", exc)
+        return HTMLResponse(
+            f'<div class="alert alert-danger mb-0">'
+            f'<i class="bi bi-x-circle-fill me-2"></i>Error: {exc}</div>'
+        )
+
+
+@router.post("/test-abook", response_class=HTMLResponse)
+async def test_abook(
+    request: Request,
+    abook_url: str = Form(default=""),
+    abook_username: str = Form(default=""),
+    abook_password: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    if not abook_url:
+        abook_url = get_setting(db, "abook_url")
+    if not abook_username:
+        abook_username = get_setting(db, "abook_username")
+    if not abook_password:
+        abook_password = get_setting(db, "abook_password")
+
+    if not abook_url or not abook_username or not abook_password:
+        return HTMLResponse(
+            '<div class="alert alert-warning mb-0">abook.link URL, username and password are all required.</div>'
+        )
+
+    try:
+        scraper = AbookScraper(abook_url, abook_username, abook_password)
+        success = scraper.login()
+        if success:
+            return HTMLResponse(
+                '<div class="alert alert-success mb-0">'
+                '<i class="bi bi-check-circle-fill me-2"></i>Login successful!</div>'
+            )
+        else:
+            return HTMLResponse(
+                '<div class="alert alert-danger mb-0">'
+                '<i class="bi bi-x-circle-fill me-2"></i>Login failed. '
+                "Check your username and password.</div>"
+            )
+    except Exception as exc:
+        logger.error("abook.link login test error: %s", exc)
         return HTMLResponse(
             f'<div class="alert alert-danger mb-0">'
             f'<i class="bi bi-x-circle-fill me-2"></i>Error: {exc}</div>'

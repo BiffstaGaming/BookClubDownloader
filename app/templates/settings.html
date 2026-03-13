@@ -24,11 +24,7 @@
       {% endif %}
     </div>
 
-    <form
-      hx-post="/settings"
-      hx-target="#settings-message"
-      hx-swap="innerHTML"
-    >
+    <form action="/settings" method="post">
       <!-- abook.link Section -->
       <div class="bc-card mb-4">
         <div class="bc-card-header d-flex align-items-center gap-2">
@@ -73,6 +69,22 @@
                 autocomplete="current-password"
               />
             </div>
+          </div>
+          <!-- abook.link connection test -->
+          <div class="d-flex align-items-center gap-3 flex-wrap mt-3">
+            <button
+              type="button"
+              class="btn bc-btn-outline"
+              hx-post="/settings/test-abook"
+              hx-target="#abook-test-result"
+              hx-swap="innerHTML"
+              hx-indicator=".abook-test-spinner"
+              hx-include="[name='abook_url'],[name='abook_username'],[name='abook_password']"
+            >
+              <span class="spinner-border spinner-border-sm abook-test-spinner htmx-indicator me-1" role="status"></span>
+              <i class="bi bi-lightning-charge me-1"></i>Test abook.link Login
+            </button>
+            <div id="abook-test-result" class="flex-grow-1"></div>
           </div>
         </div>
       </div>
@@ -146,6 +158,7 @@
               hx-target="#nzb-test-result"
               hx-swap="innerHTML"
               hx-indicator=".nzbget-test-spinner"
+              hx-include="[name='nzbget_url'],[name='nzbget_username'],[name='nzbget_password']"
             >
               <span class="spinner-border spinner-border-sm nzbget-test-spinner htmx-indicator me-1" role="status"></span>
               <i class="bi bi-lightning-charge me-1"></i>Test NZBGet Connection
