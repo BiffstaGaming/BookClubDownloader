@@ -14,7 +14,9 @@
           <span class="text-muted small">&bull; Post #{{ post.msg_id }}</span>
         </div>
 
-        {% set rev = revealed_posts.get(post.msg_id) %}
+        {# Use freshly-thanked data if present, otherwise fall back to already-revealed data from get_topic #}
+        {% set rev = revealed_posts.get(post.msg_id) if revealed_posts else None %}
+        {% if rev is none %}{% set rev = post.revealed %}{% endif %}
 
         {% if rev %}
         <!-- Revealed content -->
@@ -83,7 +85,7 @@
           {% endif %}
         </div>
 
-        {% elif post.thank_href %}
+        {% elif post.has_hidden %}
         <!-- Thank button to reveal -->
         <div class="bc-locked-notice d-flex align-items-center gap-3 mb-2">
           <i class="bi bi-lock-fill text-warning fs-5"></i>
