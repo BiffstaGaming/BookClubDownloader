@@ -1,0 +1,126 @@
+<div class="bc-card step-card">
+  <div class="bc-card-header d-flex align-items-center gap-3">
+    <span class="step-badge">3</span>
+    <span class="text-truncate">{{ topic.title }}</span>
+  </div>
+  <div class="bc-card-body">
+    {% if topic.posts %}
+      {% for post in topic.posts %}
+      <div class="bc-post-block mb-4">
+        <!-- Post header -->
+        <div class="bc-post-header d-flex align-items-center gap-2 mb-3">
+          <i class="bi bi-person-circle text-accent"></i>
+          <span class="fw-semibold">{{ post.author or "Unknown author" }}</span>
+          <span class="text-muted small">&bull; Post #{{ post.msg_id }}</span>
+        </div>
+
+        {% set rev = revealed_posts.get(post.msg_id) %}
+
+        {% if rev %}
+        <!-- Revealed content -->
+        <div class="bc-revealed mb-3">
+          <div class="bc-revealed-label mb-2">
+            <i class="bi bi-unlock-fill me-1"></i>Revealed Content
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col-sm-6">
+              <div class="bc-info-box">
+                <div class="bc-info-label">Search Term</div>
+                <div class="bc-info-value">
+                  {% if rev.search_term %}
+                  <code>{{ rev.search_term }}</code>
+                  {% else %}
+                  <span class="text-muted">Not found</span>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+            <div class="col-sm-6">
+              <div class="bc-info-box">
+                <div class="bc-info-label">Password</div>
+                <div class="bc-info-value">
+                  {% if rev.password %}
+                  <span class="bc-password-badge">
+                    <i class="bi bi-key-fill me-1"></i>{{ rev.password }}
+                  </span>
+                  {% else %}
+                  <span class="text-muted">None</span>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {% if rev.search_term %}
+          <!-- Search NZBs button -->
+          <form
+            hx-post="/search/nzb"
+            hx-target="#nzb-results"
+            hx-swap="innerHTML"
+            hx-indicator=".htmx-indicator"
+            class="d-inline"
+          >
+            <input type="hidden" name="search_term" value="{{ rev.search_term }}" />
+            <input type="hidden" name="password" value="{{ rev.password or '' }}" />
+            <input type="hidden" name="post_title" value="{{ topic.title }}" />
+            <input type="hidden" name="topic_id" value="{{ topic.topic_id }}" />
+            <input type="hidden" name="msg_id" value="{{ post.msg_id }}" />
+            <button type="submit" class="btn bc-btn-primary">
+              <i class="bi bi-search me-1"></i>Search NZBs for "{{ rev.search_term }}"
+            </button>
+          </form>
+          {% else %}
+          <div class="alert alert-warning py-2 mb-0">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            Could not automatically extract a search term. Check the raw content below and search manually.
+          </div>
+          {% if rev.raw_text %}
+          <details class="mt-2">
+            <summary class="text-muted small" style="cursor:pointer;">Show raw post content</summary>
+            <pre class="bc-raw-text mt-2">{{ rev.raw_text[:2000] }}</pre>
+          </details>
+          {% endif %}
+          {% endif %}
+        </div>
+
+        {% elif post.thank_href %}
+        <!-- Thank button to reveal -->
+        <div class="bc-locked-notice d-flex align-items-center gap-3 mb-2">
+          <i class="bi bi-lock-fill text-warning fs-5"></i>
+          <span class="text-muted">Hidden content — thank this post to reveal the NZB search term and password.</span>
+        </div>
+        <form
+          hx-post="/search/thank"
+          hx-target="#post-detail"
+          hx-swap="innerHTML"
+          hx-indicator=".htmx-indicator"
+          class="d-inline"
+        >
+          <input type="hidden" name="topic_id" value="{{ topic.topic_id }}" />
+          <input type="hidden" name="msg_id" value="{{ post.msg_id }}" />
+          <input type="hidden" name="thank_href" value="{{ post.thank_href }}" />
+          <input type="hidden" name="post_title" value="{{ topic.title }}" />
+          <button type="submit" class="btn bc-btn-warning">
+            <i class="bi bi-hand-thumbs-up-fill me-1"></i>Thank to Reveal
+          </button>
+        </form>
+
+        {% else %}
+        <div class="text-muted small">
+          <i class="bi bi-info-circle me-1"></i>
+          No hidden content detected in this post.
+        </div>
+        {% endif %}
+      </div>
+      {% if not loop.last %}
+      <hr class="bc-divider" />
+      {% endif %}
+      {% endfor %}
+    {% else %}
+    <div class="bc-empty-state">
+      <i class="bi bi-chat-square-dots fs-2 text-muted mb-3 d-block"></i>
+      <p class="text-muted mb-0">No posts found in this topic.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>

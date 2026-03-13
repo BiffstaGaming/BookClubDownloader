@@ -1,0 +1,9 @@
+version: '3.8'
+services:
+  bookclub:
+    build: .
+    ports:
+      - "9933:9933"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

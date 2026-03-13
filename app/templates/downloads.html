@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}BookClub — Downloads{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-12">
+    <h4 class="page-title mb-4">
+      <i class="bi bi-download me-2 text-accent"></i>
+      Download History
+    </h4>
+  </div>
+
+  <div class="col-12">
+    <div class="bc-card">
+      <div class="bc-card-header d-flex align-items-center justify-content-between">
+        <span>Sent Downloads</span>
+        <span class="badge bc-badge-muted">{{ downloads | length }} total</span>
+      </div>
+      <div class="bc-card-body p-0">
+        {% if downloads %}
+        <div class="table-responsive">
+          <table class="table bc-table mb-0">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Search Term</th>
+                <th>NZBGet Job</th>
+                <th>Status</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for dl in downloads %}
+              <tr>
+                <td>
+                  <div class="fw-semibold text-primary-light">{{ dl.post_title or dl.nzb_name or "—" }}</div>
+                  {% if dl.nzb_name and dl.nzb_name != dl.post_title %}
+                  <div class="text-muted small">{{ dl.nzb_name }}</div>
+                  {% endif %}
+                </td>
+                <td>
+                  <code class="bc-code">{{ dl.search_term or "—" }}</code>
+                  {% if dl.password %}
+                  <div class="mt-1">
+                    <span class="bc-password-badge">
+                      <i class="bi bi-key-fill me-1"></i>{{ dl.password }}
+                    </span>
+                  </div>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if dl.nzbget_id %}
+                  <code class="bc-code">{{ dl.nzbget_id }}</code>
+                  {% else %}
+                  <span class="text-muted">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if dl.status == "sent" %}
+                  <span class="badge bc-badge-success">
+                    <i class="bi bi-check-circle-fill me-1"></i>Sent
+                  </span>
+                  {% elif dl.status == "failed" %}
+                  <span class="badge bc-badge-danger">
+                    <i class="bi bi-x-circle-fill me-1"></i>Failed
+                  </span>
+                  {% else %}
+                  <span class="badge bc-badge-muted">{{ dl.status }}</span>
+                  {% endif %}
+                </td>
+                <td class="text-muted small">
+                  {% if dl.created_at %}
+                  {{ dl.created_at.strftime("%Y-%m-%d %H:%M") }}
+                  {% else %}
+                  —
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="bc-empty-state">
+          <i class="bi bi-inbox fs-1 text-muted mb-3 d-block"></i>
+          <p class="text-muted mb-0">No downloads yet. <a href="/" class="text-accent">Search for an audiobook</a> to get started.</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

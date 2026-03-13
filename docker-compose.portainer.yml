@@ -1,0 +1,15 @@
+version: '3.8'
+
+# Portainer stack definition — pulls pre-built image from GHCR.
+# Update the image tag to pin a specific version, e.g. :1.0.0
+services:
+  bookclub:
+    image: ghcr.io/biffstagaming/bookclub:latest
+    ports:
+      - "9933:9933"
+    volumes:
+      - bookclub_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  bookclub_data:

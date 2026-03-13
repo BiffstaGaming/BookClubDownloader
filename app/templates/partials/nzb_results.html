@@ -1,0 +1,80 @@
+<div class="bc-card step-card">
+  <div class="bc-card-header d-flex align-items-center gap-3">
+    <span class="step-badge">4</span>
+    <span>
+      NZB Results for:
+      <code class="ms-1 bc-code-accent">{{ search_term }}</code>
+    </span>
+    {% if password %}
+    <span class="bc-password-badge ms-auto">
+      <i class="bi bi-key-fill me-1"></i>{{ password }}
+    </span>
+    {% endif %}
+  </div>
+  <div class="bc-card-body p-0">
+    {% if results %}
+    <div class="table-responsive">
+      <table class="table bc-table mb-0">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th style="width:110px;">Size</th>
+            <th style="width:100px;">Age</th>
+            <th class="text-end" style="width:160px;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for nzb in results %}
+          <tr>
+            <td>
+              <span class="fw-semibold text-primary-light">{{ nzb.title }}</span>
+              {% if nzb.detail_url %}
+              <a
+                href="{{ nzb.detail_url }}"
+                target="_blank"
+                rel="noopener"
+                class="ms-2 text-muted"
+                title="Open detail page"
+              ><i class="bi bi-box-arrow-up-right small"></i></a>
+              {% endif %}
+            </td>
+            <td class="text-muted small">{{ nzb.size or "—" }}</td>
+            <td class="text-muted small">{{ nzb.age or "—" }}</td>
+            <td class="text-end">
+              <form
+                hx-post="/downloads/send"
+                hx-target="#download-status"
+                hx-swap="innerHTML"
+                hx-indicator=".htmx-indicator"
+                class="d-inline"
+              >
+                <input type="hidden" name="nzb_hash" value="{{ nzb.nzb_hash }}" />
+                <input type="hidden" name="nzb_title" value="{{ nzb.title }}" />
+                <input type="hidden" name="search_term" value="{{ search_term }}" />
+                <input type="hidden" name="password" value="{{ password or '' }}" />
+                <input type="hidden" name="post_title" value="{{ post_title or '' }}" />
+                <input type="hidden" name="topic_id" value="{{ topic_id or '' }}" />
+                <input type="hidden" name="msg_id" value="{{ msg_id or '' }}" />
+                <button type="submit" class="btn bc-btn-sm-success">
+                  <i class="bi bi-send-fill me-1"></i>Send to NZBGet
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <!-- Status area for download feedback -->
+    <div id="download-status" class="p-3"></div>
+    {% else %}
+    <div class="bc-empty-state">
+      <i class="bi bi-cloud-slash fs-2 text-muted mb-3 d-block"></i>
+      <p class="text-muted mb-0">
+        No NZB results found for <strong>{{ search_term }}</strong>.
+        The files may have expired or the search term may need adjustment.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>

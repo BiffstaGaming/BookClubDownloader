@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}BookClub — Settings{% endblock %}
+
+{% block content %}
+<div class="row g-4 justify-content-center">
+  <div class="col-12 col-xl-9">
+    <h4 class="page-title mb-4">
+      <i class="bi bi-gear-fill me-2 text-accent"></i>
+      Settings
+    </h4>
+
+    <!-- Flash message (full-page save) -->
+    <div id="settings-message">
+      {% if message %}
+      <div class="alert alert-{{ 'success' if message_type == 'success' else 'danger' }} alert-dismissible fade show" role="alert">
+        {% if message_type == "success" %}
+        <i class="bi bi-check-circle-fill me-2"></i>
+        {% else %}
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+        {% endif %}
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+      {% endif %}
+    </div>
+
+    <form
+      hx-post="/settings"
+      hx-target="#settings-message"
+      hx-swap="innerHTML"
+    >
+      <!-- abook.link Section -->
+      <div class="bc-card mb-4">
+        <div class="bc-card-header d-flex align-items-center gap-2">
+          <i class="bi bi-journal-bookmark-fill text-accent"></i>
+          <span>abook.link Credentials</span>
+        </div>
+        <div class="bc-card-body">
+          <div class="mb-3">
+            <label for="abook_url" class="form-label bc-label">Forum Base URL</label>
+            <input
+              type="url"
+              class="form-control bc-input"
+              id="abook_url"
+              name="abook_url"
+              value="{{ settings.get('abook_url', 'https://abook.link/book/index.php') }}"
+              placeholder="https://abook.link/book/index.php"
+            />
+            <div class="form-text text-muted">
+              The URL of the abook.link forum index page.
+            </div>
+          </div>
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <label for="abook_username" class="form-label bc-label">Username</label>
+              <input
+                type="text"
+                class="form-control bc-input"
+                id="abook_username"
+                name="abook_username"
+                value="{{ settings.get('abook_username', '') }}"
+                autocomplete="username"
+              />
+            </div>
+            <div class="col-sm-6">
+              <label for="abook_password" class="form-label bc-label">Password</label>
+              <input
+                type="password"
+                class="form-control bc-input"
+                id="abook_password"
+                name="abook_password"
+                value="{{ settings.get('abook_password', '') }}"
+                autocomplete="current-password"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NZBGet Section -->
+      <div class="bc-card mb-4">
+        <div class="bc-card-header d-flex align-items-center gap-2">
+          <i class="bi bi-hdd-network-fill text-accent"></i>
+          <span>NZBGet Connection</span>
+        </div>
+        <div class="bc-card-body">
+          <div class="mb-3">
+            <label for="nzbget_url" class="form-label bc-label">NZBGet URL</label>
+            <input
+              type="url"
+              class="form-control bc-input"
+              id="nzbget_url"
+              name="nzbget_url"
+              value="{{ settings.get('nzbget_url', '') }}"
+              placeholder="http://nzbget:6789"
+            />
+            <div class="form-text text-muted">
+              Include protocol and port, e.g. <code>http://localhost:6789</code>
+            </div>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              <label for="nzbget_username" class="form-label bc-label">Username</label>
+              <input
+                type="text"
+                class="form-control bc-input"
+                id="nzbget_username"
+                name="nzbget_username"
+                value="{{ settings.get('nzbget_username', '') }}"
+                autocomplete="username"
+              />
+            </div>
+            <div class="col-sm-6">
+              <label for="nzbget_password" class="form-label bc-label">Password</label>
+              <input
+                type="password"
+                class="form-control bc-input"
+                id="nzbget_password"
+                name="nzbget_password"
+                value="{{ settings.get('nzbget_password', '') }}"
+                autocomplete="current-password"
+              />
+            </div>
+          </div>
+          <div class="mb-3">
+            <label for="nzbget_category" class="form-label bc-label">Default Category</label>
+            <input
+              type="text"
+              class="form-control bc-input"
+              id="nzbget_category"
+              name="nzbget_category"
+              value="{{ settings.get('nzbget_category', '') }}"
+              placeholder="Audiobooks"
+            />
+            <div class="form-text text-muted">
+              Optional NZBGet category to assign downloads to.
+            </div>
+          </div>
+
+          <!-- NZBGet connection test -->
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              class="btn bc-btn-outline"
+              hx-post="/settings/test-nzbget"
+              hx-target="#nzb-test-result"
+              hx-swap="innerHTML"
+              hx-indicator=".nzbget-test-spinner"
+            >
+              <span class="spinner-border spinner-border-sm nzbget-test-spinner htmx-indicator me-1" role="status"></span>
+              <i class="bi bi-lightning-charge me-1"></i>Test NZBGet Connection
+            </button>
+            <div id="nzb-test-result" class="flex-grow-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Save button -->
+      <div class="d-flex justify-content-end">
+        <button type="submit" class="btn bc-btn-primary px-5">
+          <i class="bi bi-floppy-fill me-2"></i>Save Settings
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

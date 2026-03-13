@@ -1,0 +1,48 @@
+<div class="bc-card step-card">
+  <div class="bc-card-header d-flex align-items-center gap-3">
+    <span class="step-badge">2</span>
+    <span>Forum Results
+      <span class="badge bc-badge-muted ms-2">{{ results | length }} found</span>
+    </span>
+  </div>
+  <div class="bc-card-body p-0">
+    {% if results %}
+    <div class="table-responsive">
+      <table class="table bc-table mb-0">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th class="text-end" style="width:130px;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for result in results %}
+          <tr>
+            <td>
+              <span class="fw-semibold text-primary-light">{{ result.title }}</span>
+              <div class="text-muted small">Topic #{{ result.topic_id }}</div>
+            </td>
+            <td class="text-end">
+              <button
+                class="btn bc-btn-sm-primary"
+                hx-get="/search/topic/{{ result.topic_id }}"
+                hx-target="#post-detail"
+                hx-swap="innerHTML"
+                hx-indicator=".htmx-indicator"
+              >
+                <i class="bi bi-eye me-1"></i>View Post
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="bc-empty-state">
+      <i class="bi bi-binoculars fs-2 text-muted mb-3 d-block"></i>
+      <p class="text-muted mb-0">No posts found for <strong>{{ query }}</strong>. Try different keywords.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
