@@ -117,25 +117,63 @@ class AbookScraper:
         """Search the forum and return a deduplicated list of topic dicts."""
         self.ensure_logged_in()
         try:
-            search_url = f"{self.base_url}?action=search2;sa=results"
+            # Step 1: GET the search form to extract hidden CSRF fields
+            search_form_resp = self.session.get(
+                f"{self.base_url}?action=search", timeout=30, allow_redirects=True
+            )
+            search_form_resp.raise_for_status()
+            form_soup = BeautifulSoup(search_form_resp.text, "lxml")
+
+            hidden_fields = {}
+            search_form = form_soup.find("form", id=re.compile(r"search", re.I)) or \
+                          form_soup.find("form", action=re.compile(r"search2", re.I)) or \
+                          form_soup.find("form")
+            if search_form:
+                for inp in search_form.find_all("input", type="hidden"):
+                    name = inp.get("name")
+                    value = inp.get("value", "")
+                    if name:
+                        hidden_fields[name] = value
+                # Detect the actual action URL from the form
+                form_action = search_form.get("action", "")
+                logger.info("AbookScraper.search: form action=%r hidden=%r", form_action, list(hidden_fields.keys()))
+            else:
+                logger.warning("AbookScraper.search: could not find search form on page")
+
+            # Step 2: POST search — try the action from the form first, fall back to known URLs
+            if form_action:
+                if form_action.startswith("http"):
+                    search_url = form_action
+                else:
+                    search_url = urljoin(self.base_url + "/", form_action)
+            else:
+                search_url = f"{self.base_url}?action=search2;sa=results"
+
             data = {
+                **hidden_fields,
                 "search": query,
                 "searchtype": "1",
                 "subjectonly": "1",
             }
+            logger.info("AbookScraper.search: posting to %r with query=%r", search_url, query)
             response = self.session.post(search_url, data=data, timeout=30, allow_redirects=True)
             response.raise_for_status()
+
+            # Log a snippet so we can see what came back
+            logger.info(
+                "AbookScraper.search: response url=%r status=%d snippet=%r",
+                response.url, response.status_code, response.text[:500],
+            )
+
             soup = BeautifulSoup(response.text, "lxml")
 
             results = []
             seen_ids = set()
 
-            # Find all anchor tags whose href contains "topic="
             for anchor in soup.find_all("a", href=True):
                 href = anchor["href"]
                 if "topic=" not in href:
                     continue
-                # Extract numeric topic_id
                 match = re.search(r"topic=(\d+)", href)
                 if not match:
                     continue
@@ -146,7 +184,6 @@ class AbookScraper:
                 title = anchor.get_text(strip=True)
                 if not title:
                     continue
-                # Build an absolute URL
                 if href.startswith("http"):
                     url = href
                 else:
@@ -157,7 +194,7 @@ class AbookScraper:
                     "url": url,
                 })
 
-            logger.info("AbookScraper.search: found %d results for query '%s'", len(results), query)
+            logger.info("AbookScraper.search: found %d results for query '%r'", len(results), query)
             return results
         except requests.RequestException as exc:
             logger.error("AbookScraper.search failed: %s", exc)
