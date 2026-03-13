@@ -51,24 +51,33 @@ class AbookScraper:
                     if name:
                         hidden_fields[name] = value
 
-            # Find the session/form token — SMF uses a random field name whose
-            # value is a 32-char hex string
+            # Extract session token from the onsubmit handler:
+            # onsubmit="hashLoginPassword(this, 'TOKEN')"
             token_value = ""
-            for val in hidden_fields.values():
-                if re.fullmatch(r"[0-9a-f]{32}", val):
-                    token_value = val
-                    break
+            onsubmit_match = re.search(
+                r"hashLoginPassword\(this,\s*'([0-9a-f]{32})'", login_page.text
+            )
+            if onsubmit_match:
+                token_value = onsubmit_match.group(1)
+            else:
+                # Fallback: look for a 32-char hex value among hidden fields
+                for val in hidden_fields.values():
+                    if re.fullmatch(r"[0-9a-f]{32}", val):
+                        token_value = val
+                        break
 
             # Step 2: compute SMF's client-side hash
-            # hash_passwrd = SHA1( SHA1(password) + token_value[:32] )
+            # Formula from sha1.js hashLoginPassword():
+            # hash_passwrd = SHA1( SHA1(username.lower() + password) + session_token )
             if token_value:
-                inner = hashlib.sha1(self.password.encode("utf-8")).hexdigest()
+                inner = hashlib.sha1(
+                    (self.username.lower() + self.password).encode("utf-8")
+                ).hexdigest()
                 hash_passwrd = hashlib.sha1(
-                    (inner + token_value[:32]).encode("utf-8")
+                    (inner + token_value).encode("utf-8")
                 ).hexdigest()
             else:
-                # Fallback: some older SMF installs just use SHA1(password)
-                logger.warning("AbookScraper: no token found, using plain SHA1 hash")
+                logger.warning("AbookScraper: no session token found, login will likely fail")
                 hash_passwrd = hashlib.sha1(self.password.encode("utf-8")).hexdigest()
 
             # Step 3: build and POST the login form
@@ -117,63 +126,35 @@ class AbookScraper:
         """Search the forum and return a deduplicated list of topic dicts."""
         self.ensure_logged_in()
         try:
-            # Step 1: GET the search form to extract hidden CSRF fields
-            search_form_resp = self.session.get(
-                f"{self.base_url}?action=search", timeout=30, allow_redirects=True
+            response = self.session.post(
+                f"{self.base_url}?action=search2",
+                data={
+                    "search": query,
+                    "searchtype": "1",
+                    "subject_only": "1",
+                    "nograve": "1",
+                },
+                timeout=30,
+                allow_redirects=True,
             )
-            search_form_resp.raise_for_status()
-            form_soup = BeautifulSoup(search_form_resp.text, "lxml")
-
-            hidden_fields = {}
-            search_form = form_soup.find("form", id=re.compile(r"search", re.I)) or \
-                          form_soup.find("form", action=re.compile(r"search2", re.I)) or \
-                          form_soup.find("form")
-            if search_form:
-                for inp in search_form.find_all("input", type="hidden"):
-                    name = inp.get("name")
-                    value = inp.get("value", "")
-                    if name:
-                        hidden_fields[name] = value
-                # Detect the actual action URL from the form
-                form_action = search_form.get("action", "")
-                logger.info("AbookScraper.search: form action=%r hidden=%r", form_action, list(hidden_fields.keys()))
-            else:
-                logger.warning("AbookScraper.search: could not find search form on page")
-
-            # Step 2: POST search — try the action from the form first, fall back to known URLs
-            if form_action:
-                if form_action.startswith("http"):
-                    search_url = form_action
-                else:
-                    search_url = urljoin(self.base_url + "/", form_action)
-            else:
-                search_url = f"{self.base_url}?action=search2;sa=results"
-
-            data = {
-                **hidden_fields,
-                "search": query,
-                "searchtype": "1",
-                "subjectonly": "1",
-            }
-            logger.info("AbookScraper.search: posting to %r with query=%r", search_url, query)
-            response = self.session.post(search_url, data=data, timeout=30, allow_redirects=True)
             response.raise_for_status()
-
-            # Log a snippet so we can see what came back
-            logger.info(
-                "AbookScraper.search: response url=%r status=%d snippet=%r",
-                response.url, response.status_code, response.text[:500],
-            )
-
             soup = BeautifulSoup(response.text, "lxml")
 
             results = []
             seen_ids = set()
 
-            for anchor in soup.find_all("a", href=True):
-                href = anchor["href"]
-                if "topic=" not in href:
+            # Results are in <h5> tags: Board / <a href="...topic=ID.msg...">Title</a>
+            for h5 in soup.find_all("h5"):
+                anchors = h5.find_all("a", href=True)
+                # The last anchor in the h5 is the topic link
+                topic_anchor = None
+                for a in anchors:
+                    if "topic=" in a.get("href", ""):
+                        topic_anchor = a
+                if not topic_anchor:
                     continue
+                href = topic_anchor["href"]
+                # topic=114952.msg133684 — extract only the numeric topic ID
                 match = re.search(r"topic=(\d+)", href)
                 if not match:
                     continue
@@ -181,20 +162,16 @@ class AbookScraper:
                 if topic_id in seen_ids:
                     continue
                 seen_ids.add(topic_id)
-                title = anchor.get_text(strip=True)
+                title = topic_anchor.get_text(strip=True)
                 if not title:
                     continue
-                if href.startswith("http"):
-                    url = href
-                else:
-                    url = urljoin(self.base_url + "/", href)
                 results.append({
                     "topic_id": topic_id,
                     "title": title,
-                    "url": url,
+                    "url": href if href.startswith("http") else urljoin(self.base_url + "/", href),
                 })
 
-            logger.info("AbookScraper.search: found %d results for query '%r'", len(results), query)
+            logger.info("AbookScraper.search: found %d results for query %r", len(results), query)
             return results
         except requests.RequestException as exc:
             logger.error("AbookScraper.search failed: %s", exc)
