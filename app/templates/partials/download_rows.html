@@ -1,0 +1,39 @@
+{% if downloads %}
+{% for dl in downloads %}
+<tr>
+  <td>
+    <div class="fw-semibold text-primary-light">{{ dl.post_title or dl.nzb_name or "—" }}</div>
+    {% if dl.nzb_name and dl.nzb_name != dl.post_title %}
+    <div class="text-muted small">{{ dl.nzb_name }}</div>
+    {% endif %}
+  </td>
+  <td>
+    <code class="bc-code">{{ dl.search_term or "—" }}</code>
+    {% if dl.password %}
+    <div class="mt-1">
+      <span class="bc-password-badge"><i class="bi bi-key-fill me-1"></i>{{ dl.password }}</span>
+    </div>
+    {% endif %}
+  </td>
+  <td>
+    {% if dl.nzbget_id %}<code class="bc-code">{{ dl.nzbget_id }}</code>{% else %}—{% endif %}
+  </td>
+  <td>
+    {% if dl.status == "downloaded" %}
+    <span class="badge bc-badge-success"><i class="bi bi-check-circle-fill me-1"></i>Downloaded</span>
+    {% elif dl.status == "sent" %}
+    <span class="badge" style="background:var(--accent);color:#fff;"><i class="bi bi-arrow-down-circle me-1"></i>Downloading</span>
+    {% elif dl.status == "failed" %}
+    <span class="badge bc-badge-danger"><i class="bi bi-x-circle-fill me-1"></i>Failed</span>
+    {% else %}
+    <span class="badge bc-badge-muted">{{ dl.status }}</span>
+    {% endif %}
+  </td>
+  <td class="text-muted small">
+    {{ dl.created_at.strftime("%Y-%m-%d %H:%M") if dl.created_at else "—" }}
+  </td>
+</tr>
+{% endfor %}
+{% else %}
+<tr><td colspan="5" class="text-center text-muted py-4">No downloads yet.</td></tr>
+{% endif %}

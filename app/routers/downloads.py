@@ -120,10 +120,55 @@ async def send_to_nzbget(
 
 @router.get("", response_class=HTMLResponse)
 async def downloads_page(request: Request, db: Session = Depends(get_db)):
-    downloads = (
-        db.query(Download).order_by(Download.created_at.desc()).all()
-    )
+    downloads = db.query(Download).order_by(Download.created_at.desc()).all()
     return templates.TemplateResponse(
         "downloads.html",
+        {"request": request, "downloads": downloads},
+    )
+
+
+@router.post("/sync-status", response_class=HTMLResponse)
+async def sync_status(request: Request, db: Session = Depends(get_db)):
+    """
+    Check nzbget history for any downloads still in 'sent' status and update them.
+    Called by HTMX polling on the downloads page.
+    """
+    nzbget_url = get_setting(db, "nzbget_url")
+    nzbget_username = get_setting(db, "nzbget_username")
+    nzbget_password = get_setting(db, "nzbget_password")
+
+    pending = db.query(Download).filter(
+        Download.status == "sent", Download.nzbget_id.isnot(None)
+    ).all()
+
+    if not pending or not nzbget_url:
+        # Nothing to check — return current table rows silently
+        downloads = db.query(Download).order_by(Download.created_at.desc()).all()
+        return templates.TemplateResponse(
+            "partials/download_rows.html",
+            {"request": request, "downloads": downloads},
+        )
+
+    try:
+        client = NzbgetClient(nzbget_url, nzbget_username, nzbget_password)
+        history = client.get_history()
+        # history items have 'NZBID' and 'Status' fields
+        history_by_id = {item.get("NZBID"): item for item in history}
+
+        for dl in pending:
+            item = history_by_id.get(dl.nzbget_id)
+            if item:
+                raw_status = item.get("Status", "").upper()
+                if "SUCCESS" in raw_status:
+                    dl.status = "downloaded"
+                elif "FAILURE" in raw_status or "DELETED" in raw_status:
+                    dl.status = "failed"
+        db.commit()
+    except Exception as exc:
+        logger.warning("sync_status: could not reach nzbget: %s", exc)
+
+    downloads = db.query(Download).order_by(Download.created_at.desc()).all()
+    return templates.TemplateResponse(
+        "partials/download_rows.html",
         {"request": request, "downloads": downloads},
     )

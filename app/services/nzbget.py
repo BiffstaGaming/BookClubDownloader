@@ -93,3 +93,8 @@ class NzbgetClient:
         job_id = int(result)
         logger.info("NzbgetClient.add_nzb: added '%s' with job ID %d", safe_name, job_id)
         return job_id
+
+    def get_history(self) -> list:
+        """Return nzbget's download history list."""
+        result = self._rpc("history", [False])
+        return result if isinstance(result, list) else []
