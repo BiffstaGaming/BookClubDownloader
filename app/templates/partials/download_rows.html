@@ -48,24 +48,28 @@
     <div class="mt-1">
       <span class="badge bc-badge-danger"><i class="bi bi-x-circle-fill me-1"></i>Conversion Failed</span>
     </div>
+    {% elif dl.m4b_status == "move_failed" %}
+    <div class="mt-1">
+      <span class="badge bc-badge-danger"><i class="bi bi-folder-x me-1"></i>Move Failed</span>
+    </div>
     {% endif %}
   </td>
   <td class="text-muted small">
     {{ dl.created_at.strftime("%Y-%m-%d %H:%M") if dl.created_at else "—" }}
   </td>
   <td>
-    {% if dl.status == "downloaded" and dl.m4b_status not in ("converting", "converted") %}
-    <button
-      class="btn bc-btn-sm-primary"
-      hx-get="/downloads/{{ dl.id }}/convert"
-      hx-target="#convert-panel"
-      hx-swap="innerHTML"
-      onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
-    >
-      <i class="bi bi-file-earmark-music me-1"></i>Convert to M4B
-    </button>
-    {% elif dl.m4b_status == "m4b_failed" %}
-    <div class="d-flex gap-1 flex-wrap">
+    <div class="d-flex gap-1 flex-wrap align-items-center">
+      {% if dl.status == "downloaded" and dl.m4b_status not in ("converting", "converted") %}
+      <button
+        class="btn bc-btn-sm-primary"
+        hx-get="/downloads/{{ dl.id }}/convert"
+        hx-target="#convert-panel"
+        hx-swap="innerHTML"
+        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
+      >
+        <i class="bi bi-file-earmark-music me-1"></i>Convert
+      </button>
+      {% elif dl.m4b_status in ("m4b_failed", "move_failed") %}
       <button
         class="btn bc-btn-sm-primary"
         hx-get="/downloads/{{ dl.id }}/convert"
@@ -84,10 +88,18 @@
       >
         <i class="bi bi-terminal me-1"></i>Log
       </button>
+      {% endif %}
+      <button
+        class="btn btn-sm"
+        style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
+        hx-delete="/downloads/{{ dl.id }}"
+        hx-target="closest tr"
+        hx-swap="outerHTML"
+        hx-confirm="Remove this record from history?"
+      >
+        <i class="bi bi-trash3"></i>
+      </button>
     </div>
-    {% else %}
-    <span class="text-muted small">—</span>
-    {% endif %}
   </td>
 </tr>
 {% endfor %}

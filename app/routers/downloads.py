@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+import unicodedata
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -20,12 +21,30 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 def _sanitize_filename(name: str) -> str:
-    """Normalize whitespace and remove characters invalid in filenames."""
-    # Replace non-breaking spaces and other unicode spaces with regular spaces
+    """Return a Windows-safe filename/folder component with no special characters."""
+    # Replace non-breaking and other unicode spaces with regular space
     name = name.replace('\xa0', ' ')
+    # Substitute common unicode punctuation with ASCII equivalents before stripping
+    _unicode_map = {
+        '\u2013': '-',   # en dash
+        '\u2014': '-',   # em dash
+        '\u2018': "'",   # left single quote
+        '\u2019': "'",   # right single quote
+        '\u201c': '"',   # left double quote
+        '\u201d': '"',   # right double quote
+        '\u2026': '...',  # ellipsis
+        '\u00b7': '.',   # middle dot
+        '\u00d7': 'x',   # multiplication sign
+    }
+    for src, dst in _unicode_map.items():
+        name = name.replace(src, dst)
+    # Decompose accented characters (e.g. é → e + combining accent) then drop non-ASCII
+    name = unicodedata.normalize('NFKD', name)
+    name = name.encode('ascii', 'ignore').decode('ascii')
     # Collapse multiple spaces
     name = re.sub(r' +', ' ', name)
-    name = re.sub(r'[<>:\"/\\|?*]', "_", name)
+    # Remove characters Windows forbids in filenames/paths
+    name = re.sub(r'[<>:\"/\\|?*]', '_', name)
     name = name.strip(". ")
     return name or "download"
 
@@ -109,6 +128,11 @@ async def _run_m4b_conversion(
                     except Exception as move_exc:
                         logger.warning("Could not move M4B to %s: %s", dest, move_exc)
                         log += f"\n[Move failed: {move_exc}]"
+                        dl.m4b_status = "move_failed"
+                        dl.m4b_path = output_file  # file still exists here
+                        dl.conversion_log = log[-4000:]
+                        db.commit()
+                        return
                 dl.m4b_status = "converted"
                 dl.m4b_path = final_path
                 logger.info("M4B conversion done for download %d: %s", download_id, final_path)
@@ -351,6 +375,15 @@ async def start_convert(
         f'<strong>{display_name}</strong> is being converted to M4B. '
         f'Status will update automatically on this page.</div>'
     )
+
+
+@router.delete("/{download_id}", response_class=HTMLResponse)
+async def delete_download(download_id: int, db: Session = Depends(get_db)):
+    dl = db.query(Download).filter(Download.id == download_id).first()
+    if dl:
+        db.delete(dl)
+        db.commit()
+    return HTMLResponse("")  # HTMX swaps the row with nothing, removing it
 
 
 @router.get("/{download_id}/conversion-log", response_class=HTMLResponse)
