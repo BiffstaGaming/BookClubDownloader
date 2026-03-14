@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     php-curl \
     php-zip \
     ffmpeg \
+    mp4v2-utils \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
