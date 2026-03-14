@@ -596,19 +596,31 @@ async def metadata_lookup(
             results = client.search_books(query_title.strip(), author=query_author.strip())
             if results:
                 book = results[0]
-                # ABS returns author as a string field (varies by provider)
-                author_raw = book.get("author") or book.get("authors") or ""
-                saved["title"] = book.get("title") or saved.get("title", "")
-                saved["author"] = author_raw
-                # Series may be a plain string or an array [{series, volumeNumber}]
+
+                # Extract series/volumeNumber from Audible result
+                audible_series = ""
+                audible_series_part = ""
                 series_raw = book.get("series")
                 if isinstance(series_raw, list) and series_raw:
-                    saved["series"] = series_raw[0].get("series") or series_raw[0].get("name", "")
-                    saved["series_part"] = str(series_raw[0].get("volumeNumber", ""))
+                    audible_series      = series_raw[0].get("series") or series_raw[0].get("name", "")
+                    audible_series_part = str(series_raw[0].get("volumeNumber", ""))
                 elif isinstance(series_raw, str):
-                    saved["series"] = series_raw
-                    saved["series_part"] = str(book.get("volumeNumber") or saved.get("series_part", ""))
-                log_to_db("INFO", "metadata", f"Audible lookup for #{download_id}: {saved.get('title')} by {saved.get('author')}", download_id=download_id)
+                    audible_series      = series_raw
+                    audible_series_part = str(book.get("volumeNumber", ""))
+
+                audible_author = book.get("author") or book.get("authors") or ""
+
+                # Fill gaps only — forum data takes priority, Audible fills what's missing
+                if not saved.get("title"):
+                    saved["title"] = book.get("title", "")
+                if not saved.get("author"):
+                    saved["author"] = audible_author
+                if not saved.get("series"):
+                    saved["series"] = audible_series
+                if not saved.get("series_part"):
+                    saved["series_part"] = audible_series_part
+
+                log_to_db("INFO", "metadata", f"Audible lookup for #{download_id}: {saved.get('title')} by {saved.get('author')} — series_part: {saved.get('series_part')}", download_id=download_id)
             else:
                 lookup_error = f"No Audible results found for: {query_title}"
         except Exception as exc:
