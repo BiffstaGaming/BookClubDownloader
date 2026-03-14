@@ -299,18 +299,23 @@ class AbookScraper:
         # Strip leading "PW - " prefix from search term
         search_term = re.sub(r"^PW\s*-\s*", "", search_term).strip()
 
-        # Extract structured metadata from the raw text block
+        # Extract structured metadata by parsing key: value lines
         raw = unhiddenbox.get_text(separator="\n")
+        fields = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if ":" in line:
+                key, _, value = line.partition(":")
+                key = key.strip().lower()
+                value = value.strip()
+                if key and value:
+                    fields[key] = value
 
-        def _field(pattern):
-            m = re.search(pattern, raw, re.I)
-            return m.group(1).strip() if m else ""
-
-        title       = _field(r"(?:^|\n)\s*Title\s*:\s*(.+)")
-        author      = _field(r"(?:^|\n)\s*Author\s*:\s*(.+)")
-        series      = _field(r"(?:^|\n)\s*Series\s*Name\s*:\s*(.+)")
-        series_part = _field(r"(?:^|\n)\s*Series\s*Position\s*:\s*(.+)")
-        narrator    = _field(r"(?:^|\n)\s*Read\s*By\s*:\s*(.+)")
+        title       = fields.get("title", "")
+        author      = fields.get("author", "")
+        series      = fields.get("series name", "")
+        series_part = fields.get("series position", "")
+        narrator    = fields.get("read by", "")
 
         # Normalise series_part: strip leading zeros but keep "1", "06" → "6"
         if series_part:
