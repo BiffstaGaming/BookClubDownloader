@@ -184,6 +184,12 @@ code {
   transition: border-color 0.15s;
 }
 
+select.bc-input option,
+select.bc-input optgroup {
+  background-color: var(--bg-input);
+  color: var(--text-primary);
+}
+
 .bc-input:focus {
   border-color: var(--accent) !important;
 }

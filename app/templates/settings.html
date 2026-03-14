@@ -229,26 +229,37 @@
                 value="{{ settings.get('m4b_jobs', '') }}"
                 placeholder="1"
                 min="1"
-                max="32"
+                max="256"
               />
               <div class="form-text text-muted">
-                Number of chapters to encode in parallel (<code>--jobs</code>).
-                Set to your CPU core count for fastest conversion. Default: 1.
+                m4b-tool encodes one chapter per job simultaneously (<code>--jobs</code>).
+                Most audiobooks have 10&ndash;30 chapters, so setting this above that count
+                gives no extra benefit. A good starting point is <strong>half your CPU core
+                count</strong> — e.g. <code>16</code> on a 32-core machine — to leave headroom
+                for other services. Setting it equal to or above your chapter count will
+                encode the entire book at once. Default: <code>1</code> (single-threaded).
               </div>
             </div>
             <div class="col-sm-6">
               <label for="m4b_bitrate" class="form-label bc-label">Audio Bitrate</label>
-              <input
-                type="text"
-                class="form-control bc-input"
-                id="m4b_bitrate"
-                name="m4b_bitrate"
-                value="{{ settings.get('m4b_bitrate', '') }}"
-                placeholder="128k"
-              />
+              <select class="form-select bc-input" id="m4b_bitrate" name="m4b_bitrate">
+                {% set current_bitrate = settings.get('m4b_bitrate', '') %}
+                <option value="" {% if not current_bitrate %}selected{% endif %}>Default (128k)</option>
+                <optgroup label="Recommended for audiobooks">
+                  <option value="32k"  {% if current_bitrate == '32k'  %}selected{% endif %}>32k  — Minimal / voice-only, smallest files</option>
+                  <option value="48k"  {% if current_bitrate == '48k'  %}selected{% endif %}>48k  — Low quality, very small files</option>
+                  <option value="64k"  {% if current_bitrate == '64k'  %}selected{% endif %}>64k  — Good quality for speech (recommended)</option>
+                  <option value="96k"  {% if current_bitrate == '96k'  %}selected{% endif %}>96k  — High quality speech</option>
+                </optgroup>
+                <optgroup label="Higher quality">
+                  <option value="128k" {% if current_bitrate == '128k' %}selected{% endif %}>128k — CD quality (default)</option>
+                  <option value="192k" {% if current_bitrate == '192k' %}selected{% endif %}>192k — High fidelity</option>
+                  <option value="256k" {% if current_bitrate == '256k' %}selected{% endif %}>256k — Near lossless</option>
+                </optgroup>
+              </select>
               <div class="form-text text-muted">
-                e.g. <code>64k</code>, <code>128k</code>. Lower = faster + smaller file.
-                64k is fine for audiobooks. Default: 128k.
+                Lower bitrate = faster encoding + smaller file. For audiobooks, <code>64k</code>
+                is indistinguishable from 128k for speech and encodes roughly twice as fast.
               </div>
             </div>
           </div>
