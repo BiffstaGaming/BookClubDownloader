@@ -11,6 +11,24 @@
     </button>
   </div>
   <div class="bc-card-body">
+    <!-- Audible lookup -->
+    <div class="d-flex align-items-center gap-3 mb-4">
+      <button
+        type="button"
+        class="btn bc-btn-outline btn-sm"
+        hx-get="/downloads/{{ dl.id }}/metadata-lookup"
+        hx-target="#convert-panel"
+        hx-swap="innerHTML"
+        hx-indicator=".audible-spinner"
+      >
+        <span class="spinner-border spinner-border-sm audible-spinner htmx-indicator me-1" role="status"></span>
+        <i class="bi bi-search me-1"></i>Fetch from Audible
+      </button>
+      <span class="text-muted small">Auto-fill title, author and series from Audible metadata.</span>
+      {% if lookup_error %}
+      <span class="text-warning small"><i class="bi bi-exclamation-triangle me-1"></i>{{ lookup_error }}</span>
+      {% endif %}
+    </div>
     <form
       hx-post="/downloads/{{ dl.id }}/convert"
       hx-target="#convert-panel"

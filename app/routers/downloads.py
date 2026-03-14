@@ -552,6 +552,73 @@ async def sync_status(request: Request, db: Session = Depends(get_db)):
     )
 
 
+@router.get("/{download_id}/metadata-lookup", response_class=HTMLResponse)
+async def metadata_lookup(
+    request: Request,
+    download_id: int,
+    db: Session = Depends(get_db),
+):
+    """Search Audible via ABS and return the convert form pre-filled with results."""
+    dl = db.query(Download).filter(Download.id == download_id).first()
+    if not dl:
+        return HTMLResponse('<div class="alert alert-danger">Download not found.</div>')
+
+    abs_url = get_setting(db, "abs_url")
+    abs_token = get_setting(db, "abs_token")
+
+    # Existing saved metadata (paths we want to keep)
+    saved = {}
+    if dl.download_metadata:
+        try:
+            saved = json.loads(dl.download_metadata)
+        except Exception:
+            pass
+
+    lookup_error = None
+    if abs_url and abs_token:
+        query = dl.search_term or dl.post_title or dl.nzb_name or ""
+        try:
+            client = AbsClient(abs_url, abs_token)
+            results = client.search_books(query.strip())
+            if results:
+                book = results[0]
+                # ABS returns author as a string field (varies by provider)
+                author_raw = book.get("author") or book.get("authors") or ""
+                saved["title"] = book.get("title") or saved.get("title", "")
+                saved["author"] = author_raw
+                # Series may be a plain string or an array [{series, volumeNumber}]
+                series_raw = book.get("series")
+                if isinstance(series_raw, list) and series_raw:
+                    saved["series"] = series_raw[0].get("series") or series_raw[0].get("name", "")
+                    saved["series_part"] = str(series_raw[0].get("volumeNumber", ""))
+                elif isinstance(series_raw, str):
+                    saved["series"] = series_raw
+                    saved["series_part"] = str(book.get("volumeNumber") or saved.get("series_part", ""))
+                log_to_db("INFO", "metadata", f"Audible lookup for #{download_id}: {saved.get('title')} by {saved.get('author')}", download_id=download_id)
+            else:
+                lookup_error = f"No Audible results found for: {query}"
+        except Exception as exc:
+            logger.warning("metadata_lookup failed for download %d: %s", download_id, exc)
+            lookup_error = f"Lookup failed: {exc}"
+    else:
+        lookup_error = "Audiobookshelf is not configured — cannot query Audible."
+
+    m4b_output_path = get_setting(db, "m4b_output_path")
+    safe_title = _sanitize_filename(saved.get("title") or dl.post_title or dl.nzb_name or "output")
+    default_output = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
+
+    return templates.TemplateResponse(
+        "partials/convert_form.html",
+        {
+            "request": request,
+            "dl": dl,
+            "saved": saved,
+            "suggested_output": saved.get("output_file") or default_output,
+            "lookup_error": lookup_error,
+        },
+    )
+
+
 @router.get("/{download_id}/convert", response_class=HTMLResponse)
 async def get_convert_form(
     request: Request,

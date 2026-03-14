@@ -36,6 +36,16 @@ class AbsClient:
         results = resp.json().get("book", [])
         return [r["libraryItem"] for r in results if "libraryItem" in r]
 
+    def search_books(self, title: str, author: str = "", provider: str = "audible") -> list:
+        """Search for book metadata via ABS without modifying any library item."""
+        params = {"title": title, "provider": provider}
+        if author:
+            params["author"] = author
+        resp = self._get("/api/search/books", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
     def quick_match(self, item_id: str, title: str = "", author: str = "", provider: str = "audible") -> dict:
         """Trigger Quick Match on a library item to fill cover and metadata."""
         body = {"provider": provider}
