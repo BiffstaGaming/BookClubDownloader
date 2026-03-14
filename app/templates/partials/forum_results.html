@@ -57,6 +57,10 @@
 
 <script>
 function selectForumResult(btn) {
+  // Clear downstream steps
+  document.getElementById('post-detail').innerHTML = '';
+  document.getElementById('nzb-results').innerHTML = '';
+
   const selectedRow = btn.closest('tr');
   const tbody = document.getElementById('forum-results-tbody');
 
