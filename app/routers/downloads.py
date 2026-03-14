@@ -142,30 +142,41 @@ async def _run_m4b_conversion(
             stderr=asyncio.subprocess.STDOUT,
         )
 
-        # Stream stdout line-by-line and parse progress percentage in real time
+        # Stream stdout in chunks and split on \r OR \n so we catch carriage-return
+        # progress bars (m4b-tool uses \r to overwrite the current line in-place).
+        buf = ""
         log_lines = []
         last_progress = -1
+
         while True:
-            line_bytes = await proc.stdout.readline()
-            if not line_bytes:
+            chunk = await proc.stdout.read(512)
+            if not chunk:
                 break
-            line = line_bytes.decode("utf-8", errors="replace")
-            log_lines.append(line)
-            m = re.search(r'\b(\d{1,3})%', line)
-            if m:
-                pct = min(100, int(m.group(1)))
-                if pct != last_progress:
-                    last_progress = pct
-                    try:
-                        dl_prog = db.query(Download).filter(Download.id == download_id).first()
-                        if dl_prog:
-                            dl_prog.m4b_progress = pct
-                            db.commit()
-                    except Exception:
-                        pass
+            buf += chunk.decode("utf-8", errors="replace")
+            # Split on \r\n, \n, or bare \r — keep the last incomplete fragment
+            parts = re.split(r'\r\n|\n|\r', buf)
+            buf = parts[-1]
+            for line in parts[:-1]:
+                if line.strip():
+                    log_lines.append(line)
+                m = re.search(r'\b(\d{1,3})%', line)
+                if m:
+                    pct = min(100, int(m.group(1)))
+                    if pct != last_progress:
+                        last_progress = pct
+                        try:
+                            dl_prog = db.query(Download).filter(Download.id == download_id).first()
+                            if dl_prog:
+                                dl_prog.m4b_progress = pct
+                                db.commit()
+                        except Exception:
+                            pass
+
+        if buf.strip():
+            log_lines.append(buf)
 
         await proc.wait()
-        log = "".join(log_lines)
+        log = "\n".join(log_lines)
 
         # Store the full m4b-tool output as a DEBUG entry linked to this download
         log_to_db("DEBUG", "conversion", f"m4b-tool output:\n{log}", download_id=download_id)

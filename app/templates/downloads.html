@@ -32,7 +32,7 @@
             <tbody
               id="download-rows"
               hx-post="/downloads/sync-status"
-              hx-trigger="load, every 30s, refreshDownloads from:body"
+              hx-trigger="load, every 10s, refreshDownloads from:body"
               hx-swap="innerHTML"
             >
               {% include "partials/download_rows.html" %}
