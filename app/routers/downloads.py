@@ -88,7 +88,10 @@ def _find_audio_dirs(base_path: str) -> list[str]:
 def _map_path(path: str, nzbget_prefix: str, local_prefix: str) -> str:
     """Replace the nzbget path prefix with the local path prefix."""
     if nzbget_prefix and local_prefix and path.startswith(nzbget_prefix):
-        return local_prefix.rstrip("/") + path[len(nzbget_prefix):]
+        remainder = path[len(nzbget_prefix):]
+        # Ensure exactly one slash between the local prefix and the remainder,
+        # regardless of whether the saved prefixes have trailing/leading slashes.
+        return local_prefix.rstrip("/") + "/" + remainder.lstrip("/")
     return path
 
 
