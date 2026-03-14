@@ -302,17 +302,31 @@ class AbookScraper:
         # Strip leading "PW - " prefix from search term
         search_term = re.sub(r"^PW\s*-\s*", "", search_term).strip()
 
-        # Extract structured metadata by parsing key: value lines
+        # Extract structured metadata.
+        # Some posts use same-line format:  "Title: The Core"
+        # Others use multi-line format:     "Title:\n   The Core"
+        # Parse both by looking ahead when a key line has no value.
         raw = unhiddenbox.get_text(separator="\n")
+        non_empty = [l.strip() for l in raw.splitlines() if l.strip()]
         fields = {}
-        for line in raw.splitlines():
-            line = line.strip()
+        i = 0
+        while i < len(non_empty):
+            line = non_empty[i]
             if ":" in line:
                 key, _, value = line.partition(":")
                 key = key.strip().lower()
                 value = value.strip()
-                if key and value:
+                if not value and i + 1 < len(non_empty):
+                    # Value is on the next line (multi-line format)
+                    value = non_empty[i + 1]
+                    i += 2
+                else:
+                    i += 1
+                # Sanity-check: real keys are short; skip long description sentences
+                if key and value and len(key) <= 30:
                     fields[key] = value
+            else:
+                i += 1
 
         title       = fields.get("title", "")
         author      = fields.get("author", "")

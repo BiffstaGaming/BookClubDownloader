@@ -120,9 +120,12 @@ def _extract_nzb_title(name: str) -> str:
     """
     Extract the book title from the forum NZB naming convention:
       "Book Club - Author - Series## - BookTitle (Year)"
-    Strips the year, splits on ' - ', returns the last segment.
+      "Book Club - Author - Series## - BookTitle (Narrator Name)"
+    Strips any trailing parenthetical (year OR narrator), splits on ' - ',
+    returns the last segment.
     """
-    name = re.sub(r'\s*\(\d{4}\)\s*$', '', name).strip()
+    # Strip any trailing (...) — covers both "(2025)" and "(Colin Mace)"
+    name = re.sub(r'\s*\([^)]+\)\s*$', '', name).strip()
     parts = [p.strip() for p in name.split(' - ')]
     return parts[-1] if len(parts) >= 2 else name
 
@@ -150,8 +153,9 @@ def _extract_audible_series(book: dict) -> tuple[str, str]:
 
 def _compute_confidence(nzb_title: str, nzb_author: str, audible_title: str, audible_author: str) -> int:
     """
-    Return 0-100 match confidence. Title weighted 65%, author 35%.
-    If no author to compare, title alone determines the score.
+    Return 0-100 match confidence.
+    Title is the decisive factor — if it scores < 50%, author match cannot save it.
+    Above 50% title similarity, author (35%) is factored in.
     """
     def _norm(s: str) -> str:
         return re.sub(r'[^\w\s]', '', (s or "").lower()).strip()
@@ -163,12 +167,33 @@ def _compute_confidence(nzb_title: str, nzb_author: str, audible_title: str, aud
         return difflib.SequenceMatcher(None, a, b).ratio()
 
     title_score = _ratio(nzb_title, audible_title)
+    # If the title doesn't match well enough, don't let author inflate the score
+    if title_score < 0.5:
+        return round(title_score * 100)
     if nzb_author and audible_author:
         author_score = _ratio(nzb_author, audible_author)
         score = title_score * 0.65 + author_score * 0.35
     else:
         score = title_score
     return round(score * 100)
+
+
+def _best_audible_match(results: list, nzb_title: str) -> dict:
+    """
+    From up to 5 Audible results, return the one whose title best matches
+    the extracted NZB title — rather than blindly taking results[0].
+    Audible sometimes returns the most-popular book in a series first even
+    when a different book in that series was searched.
+    """
+    def _title_ratio(book: dict) -> float:
+        a = re.sub(r'[^\w\s]', '', (nzb_title or "").lower()).strip()
+        b = re.sub(r'[^\w\s]', '', (book.get("title") or "").lower()).strip()
+        if not a or not b:
+            return 0.0
+        return difflib.SequenceMatcher(None, a, b).ratio()
+
+    candidates = results[:5]
+    return max(candidates, key=_title_ratio)
 
 
 async def _auto_process_download(download_id: int):
@@ -218,7 +243,7 @@ async def _auto_process_download(download_id: int):
                 log_to_db("WARNING", "auto", f"Download #{download_id}: no Audible results for '{nzb_title}'", download_id=download_id)
                 return
 
-            book           = results[0]
+            book           = _best_audible_match(results, nzb_title)
             audible_title  = book.get("title", "")
             audible_author = book.get("author") or book.get("authors") or ""
             audible_series, audible_series_part = _extract_audible_series(book)
@@ -792,7 +817,7 @@ async def metadata_lookup(
             client  = AbsClient(abs_url, abs_token)
             results = client.search_books(query_title.strip(), author=query_author.strip())
             if results:
-                book           = results[0]
+                book           = _best_audible_match(results, nzb_title)
                 audible_title  = book.get("title", "")
                 audible_author = book.get("author") or book.get("authors") or ""
                 audible_series, audible_series_part = _extract_audible_series(book)
