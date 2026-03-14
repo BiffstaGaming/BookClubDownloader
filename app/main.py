@@ -2,12 +2,13 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.database import engine
+from app.database import engine, migrate_db
 from app import models
 from app.routers import search, downloads, settings as settings_router
 
-# Create all DB tables on startup
+# Create all DB tables on startup, then apply any missing column migrations
 models.Base.metadata.create_all(bind=engine)
+migrate_db()
 
 app = FastAPI(title="BookClub Downloader")
 

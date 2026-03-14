@@ -25,3 +25,8 @@ class Download(Base):
     status = Column(String, default="sent")
     raw_content = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # M4B conversion fields
+    download_path = Column(Text, nullable=True)
+    m4b_status = Column(String, nullable=True)
+    m4b_path = Column(Text, nullable=True)
+    conversion_log = Column(Text, nullable=True)

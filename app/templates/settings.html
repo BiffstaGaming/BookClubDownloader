@@ -168,6 +168,75 @@
         </div>
       </div>
 
+      <!-- M4B / Path Settings Section -->
+      <div class="bc-card mb-4">
+        <div class="bc-card-header d-flex align-items-center gap-2">
+          <i class="bi bi-file-earmark-music-fill text-accent"></i>
+          <span>M4B Conversion Paths</span>
+        </div>
+        <div class="bc-card-body">
+          <p class="text-muted small mb-3">
+            NZBGet reports file paths from its own perspective inside its container.
+            If BookClub accesses those same files via a different mount point, set the
+            prefix mapping below so BookClub can locate the downloaded files.
+          </p>
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              <label for="nzbget_path_prefix" class="form-label bc-label">NZBGet Path Prefix</label>
+              <input
+                type="text"
+                class="form-control bc-input"
+                id="nzbget_path_prefix"
+                name="nzbget_path_prefix"
+                value="{{ settings.get('nzbget_path_prefix', '') }}"
+                placeholder="/downloads"
+              />
+              <div class="form-text text-muted">Path prefix as NZBGet reports it (e.g. <code>/downloads</code>)</div>
+            </div>
+            <div class="col-sm-6">
+              <label for="local_path_prefix" class="form-label bc-label">Local Path Prefix</label>
+              <input
+                type="text"
+                class="form-control bc-input"
+                id="local_path_prefix"
+                name="local_path_prefix"
+                value="{{ settings.get('local_path_prefix', '') }}"
+                placeholder="/downloads"
+              />
+              <div class="form-text text-muted">How BookClub sees the same path (e.g. <code>/downloads</code>)</div>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label for="m4b_output_path" class="form-label bc-label">M4B Output Directory</label>
+            <input
+              type="text"
+              class="form-control bc-input"
+              id="m4b_output_path"
+              name="m4b_output_path"
+              value="{{ settings.get('m4b_output_path', '') }}"
+              placeholder="/m4b"
+            />
+            <div class="form-text text-muted">Working directory where m4b-tool writes the file during conversion.</div>
+          </div>
+          <div class="mb-0">
+            <label for="m4b_move_template" class="form-label bc-label">Move After Conversion (optional)</label>
+            <input
+              type="text"
+              class="form-control bc-input"
+              id="m4b_move_template"
+              name="m4b_move_template"
+              value="{{ settings.get('m4b_move_template', '') }}"
+              placeholder="/audiobooks/[Author]/[Filename]"
+            />
+            <div class="form-text text-muted">
+              If set, the .m4b will be moved here after conversion. Available variables:
+              <code>[Author]</code> <code>[Title]</code> <code>[Series]</code> <code>[BookNumber]</code> <code>[Filename]</code>
+              &mdash; e.g. <code>/audiobooks/[Author]/[Series]/[Filename]</code>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Save button -->
       <div class="d-flex justify-content-end">
         <button type="submit" class="btn bc-btn-primary px-5">

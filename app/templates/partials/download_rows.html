@@ -6,6 +6,12 @@
     {% if dl.nzb_name and dl.nzb_name != dl.post_title %}
     <div class="text-muted small">{{ dl.nzb_name }}</div>
     {% endif %}
+    {% if dl.m4b_status == "converted" and dl.m4b_path %}
+    <div class="text-muted small mt-1">
+      <i class="bi bi-file-earmark-music-fill text-success me-1"></i>
+      <code class="bc-code" style="font-size:0.7rem;">{{ dl.m4b_path }}</code>
+    </div>
+    {% endif %}
   </td>
   <td>
     <code class="bc-code">{{ dl.search_term or "—" }}</code>
@@ -28,12 +34,63 @@
     {% else %}
     <span class="badge bc-badge-muted">{{ dl.status }}</span>
     {% endif %}
+    {% if dl.m4b_status == "converting" %}
+    <div class="mt-1">
+      <span class="badge" style="background:var(--accent);color:#fff;">
+        <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;" role="status"></span>Converting…
+      </span>
+    </div>
+    {% elif dl.m4b_status == "converted" %}
+    <div class="mt-1">
+      <span class="badge bc-badge-success"><i class="bi bi-file-earmark-music-fill me-1"></i>M4B Ready</span>
+    </div>
+    {% elif dl.m4b_status == "m4b_failed" %}
+    <div class="mt-1">
+      <span class="badge bc-badge-danger"><i class="bi bi-x-circle-fill me-1"></i>Conversion Failed</span>
+    </div>
+    {% endif %}
   </td>
   <td class="text-muted small">
     {{ dl.created_at.strftime("%Y-%m-%d %H:%M") if dl.created_at else "—" }}
   </td>
+  <td>
+    {% if dl.status == "downloaded" and dl.m4b_status not in ("converting", "converted") %}
+    <button
+      class="btn bc-btn-sm-primary"
+      hx-get="/downloads/{{ dl.id }}/convert"
+      hx-target="#convert-panel"
+      hx-swap="innerHTML"
+      onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
+    >
+      <i class="bi bi-file-earmark-music me-1"></i>Convert to M4B
+    </button>
+    {% elif dl.m4b_status == "m4b_failed" %}
+    <div class="d-flex gap-1 flex-wrap">
+      <button
+        class="btn bc-btn-sm-primary"
+        hx-get="/downloads/{{ dl.id }}/convert"
+        hx-target="#convert-panel"
+        hx-swap="innerHTML"
+        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
+      >
+        <i class="bi bi-arrow-repeat me-1"></i>Retry
+      </button>
+      <button
+        class="btn bc-btn-outline btn-sm"
+        hx-get="/downloads/{{ dl.id }}/conversion-log"
+        hx-target="#convert-panel"
+        hx-swap="innerHTML"
+        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
+      >
+        <i class="bi bi-terminal me-1"></i>Log
+      </button>
+    </div>
+    {% else %}
+    <span class="text-muted small">—</span>
+    {% endif %}
+  </td>
 </tr>
 {% endfor %}
 {% else %}
-<tr><td colspan="5" class="text-center text-muted py-4">No downloads yet.</td></tr>
+<tr><td colspan="6" class="text-center text-muted py-4">No downloads yet.</td></tr>
 {% endif %}

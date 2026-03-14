@@ -21,6 +21,10 @@ SETTING_KEYS = [
     "nzbget_username",
     "nzbget_password",
     "nzbget_category",
+    "nzbget_path_prefix",
+    "local_path_prefix",
+    "m4b_output_path",
+    "m4b_move_template",
 ]
 
 
@@ -61,6 +65,10 @@ async def save_settings(
     nzbget_username: str = Form(default=""),
     nzbget_password: str = Form(default=""),
     nzbget_category: str = Form(default=""),
+    nzbget_path_prefix: str = Form(default=""),
+    local_path_prefix: str = Form(default=""),
+    m4b_output_path: str = Form(default=""),
+    m4b_move_template: str = Form(default=""),
 ):
     values = {
         "abook_url": abook_url,
@@ -70,6 +78,10 @@ async def save_settings(
         "nzbget_username": nzbget_username,
         "nzbget_password": nzbget_password,
         "nzbget_category": nzbget_category,
+        "nzbget_path_prefix": nzbget_path_prefix,
+        "local_path_prefix": local_path_prefix,
+        "m4b_output_path": m4b_output_path,
+        "m4b_move_template": m4b_move_template,
     }
     for key, value in values.items():
         set_setting(db, key, value)

@@ -1,0 +1,113 @@
+<div class="bc-card step-card">
+  <div class="bc-card-header d-flex align-items-center gap-3">
+    <i class="bi bi-file-earmark-music-fill text-accent fs-5"></i>
+    <span>Convert to M4B — <strong>{{ dl.post_title or dl.nzb_name }}</strong></span>
+    <button
+      type="button"
+      class="btn bc-btn-outline btn-sm ms-auto"
+      onclick="document.getElementById('convert-panel').innerHTML=''"
+    >
+      <i class="bi bi-x-lg"></i>
+    </button>
+  </div>
+  <div class="bc-card-body">
+    <form
+      hx-post="/downloads/{{ dl.id }}/convert"
+      hx-target="#convert-panel"
+      hx-swap="innerHTML"
+    >
+      <!-- Metadata row -->
+      <div class="row g-3 mb-3">
+        <div class="col-sm-6">
+          <label class="form-label bc-label">Title</label>
+          <input
+            type="text"
+            name="title"
+            class="form-control bc-input"
+            placeholder="e.g. The Atlantis Covenant"
+            value="{{ dl.post_title or dl.nzb_name or '' }}"
+          />
+          <div class="form-text text-muted">Used as the audiobook title tag.</div>
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label bc-label">Author</label>
+          <input
+            type="text"
+            name="author"
+            class="form-control bc-input"
+            placeholder="e.g. Rob Jones"
+          />
+          <div class="form-text text-muted">Used as the artist/author tag.</div>
+        </div>
+      </div>
+
+      <!-- Series row -->
+      <div class="row g-3 mb-3">
+        <div class="col-sm-8">
+          <label class="form-label bc-label">Series</label>
+          <input
+            type="text"
+            name="series"
+            class="form-control bc-input"
+            placeholder="e.g. The Hunter Files"
+          />
+          <div class="form-text text-muted">Optional. Leave blank if not part of a series.</div>
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label bc-label">Book Number</label>
+          <input
+            type="text"
+            name="series_part"
+            class="form-control bc-input"
+            placeholder="e.g. 1"
+          />
+          <div class="form-text text-muted">Position in the series.</div>
+        </div>
+      </div>
+
+      <!-- Paths row -->
+      <div class="row g-3 mb-4">
+        <div class="col-sm-6">
+          <label class="form-label bc-label">Input Folder</label>
+          <input
+            type="text"
+            name="input_path"
+            class="form-control bc-input"
+            placeholder="/downloads/completed/Audiobooks/BookTitle"
+            value="{{ dl.download_path or '' }}"
+            required
+          />
+          <div class="form-text text-muted">
+            Folder containing the MP3 files to merge.
+            {% if not dl.download_path %}
+            <span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>No path recorded — enter manually.</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label bc-label">Output File</label>
+          <input
+            type="text"
+            name="output_file"
+            class="form-control bc-input"
+            placeholder="/m4b/Title.m4b"
+            value="{{ suggested_output }}"
+            required
+          />
+          <div class="form-text text-muted">Full path for the output .m4b file.</div>
+        </div>
+      </div>
+
+      <div class="d-flex align-items-center gap-3">
+        <button type="submit" class="btn bc-btn-primary px-4">
+          <span class="spinner-border spinner-border-sm htmx-indicator me-2" role="status"></span>
+          <i class="bi bi-play-fill me-1"></i>Start Conversion
+        </button>
+        <span class="text-muted small">
+          <i class="bi bi-info-circle me-1"></i>
+          Runs <code>m4b-tool merge</code> in the background — conversion may take several minutes.
+        </span>
+      </div>
+    </form>
+  </div>
+</div>

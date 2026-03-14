@@ -6,4 +6,6 @@ services:
       - "9933:9933"
     volumes:
       - ./data:/app/data
+      - /downloads:/downloads    # NZBGet completed downloads (adjust to match your setup)
+      - /m4b:/m4b                # M4B output directory (adjust to match your setup)
     restart: unless-stopped

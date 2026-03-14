@@ -1,11 +1,14 @@
+import asyncio
 import logging
+import os
 import re
-from fastapi import APIRouter, Depends, Form, Request
+import shutil
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models import Download
 from app.scrapers.nzbking import NzbkingScraper
 from app.services.nzbget import NzbgetClient
@@ -17,10 +20,115 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 def _sanitize_filename(name: str) -> str:
-    """Remove characters that are invalid in filenames."""
-    name = re.sub(r'[<>:"/\\|?*]', "_", name)
+    """Normalize whitespace and remove characters invalid in filenames."""
+    # Replace non-breaking spaces and other unicode spaces with regular spaces
+    name = name.replace('\xa0', ' ')
+    # Collapse multiple spaces
+    name = re.sub(r' +', ' ', name)
+    name = re.sub(r'[<>:\"/\\|?*]', "_", name)
     name = name.strip(". ")
     return name or "download"
+
+
+def _resolve_move_template(template: str, title: str, author: str, series: str, series_part: str, filename: str) -> str:
+    """Substitute [Variable] placeholders in the move path template."""
+    replacements = {
+        "[Author]":     _sanitize_filename(author) if author else "Unknown Author",
+        "[Title]":      _sanitize_filename(title) if title else "Unknown Title",
+        "[Series]":     _sanitize_filename(series) if series else "",
+        "[BookNumber]": series_part or "",
+        "[Filename]":   filename,
+    }
+    result = template
+    for key, value in replacements.items():
+        result = result.replace(key, value)
+    # Clean up any double slashes or trailing separators from empty substitutions
+    result = re.sub(r"[\\/]{2,}", "/", result)
+    result = result.strip("/")
+    return "/" + result
+
+
+def _map_path(path: str, nzbget_prefix: str, local_prefix: str) -> str:
+    """Replace the nzbget path prefix with the local path prefix."""
+    if nzbget_prefix and local_prefix and path.startswith(nzbget_prefix):
+        return local_prefix.rstrip("/") + path[len(nzbget_prefix):]
+    return path
+
+
+async def _run_m4b_conversion(
+    download_id: int,
+    input_path: str,
+    output_file: str,
+    title: str,
+    author: str,
+    series: str,
+    series_part: str,
+):
+    """Background task: run m4b-tool, optionally move the result, then update the DB."""
+    db = SessionLocal()
+    try:
+        move_template = get_setting(db, "m4b_move_template")
+        cmd = [
+            "m4b-tool", "merge", input_path,
+            f"--output-file={output_file}",
+            "--no-interaction",
+        ]
+        if title:
+            cmd += [f"--name={title}", f"--album={title}"]
+        if author:
+            cmd += [f"--artist={author}", f"--album-artist={author}"]
+        if series:
+            cmd.append(f"--series={series}")
+        if series_part:
+            cmd.append(f"--series-part={series_part}")
+
+        logger.info("Starting m4b-tool: %s", " ".join(cmd))
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await proc.communicate()
+        log = stdout.decode("utf-8", errors="replace")
+
+        dl = db.query(Download).filter(Download.id == download_id).first()
+        if dl:
+            if proc.returncode == 0:
+                final_path = output_file
+                # Move the file if a move template is configured
+                if move_template and os.path.isfile(output_file):
+                    filename = os.path.basename(output_file)
+                    dest = _resolve_move_template(
+                        move_template, title, author, series, series_part, filename
+                    )
+                    try:
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        shutil.move(output_file, dest)
+                        final_path = dest
+                        logger.info("Moved M4B to %s", dest)
+                    except Exception as move_exc:
+                        logger.warning("Could not move M4B to %s: %s", dest, move_exc)
+                        log += f"\n[Move failed: {move_exc}]"
+                dl.m4b_status = "converted"
+                dl.m4b_path = final_path
+                logger.info("M4B conversion done for download %d: %s", download_id, final_path)
+            else:
+                dl.m4b_status = "m4b_failed"
+                logger.error("m4b-tool returned %d for download %d", proc.returncode, download_id)
+            dl.conversion_log = log[-4000:]  # keep last 4000 chars
+            db.commit()
+    except Exception as exc:
+        logger.error("M4B conversion error for download %d: %s", download_id, exc)
+        try:
+            dl = db.query(Download).filter(Download.id == download_id).first()
+            if dl:
+                dl.m4b_status = "m4b_failed"
+                dl.conversion_log = str(exc)
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
 @router.post("/send", response_class=HTMLResponse)
@@ -136,6 +244,8 @@ async def sync_status(request: Request, db: Session = Depends(get_db)):
     nzbget_url = get_setting(db, "nzbget_url")
     nzbget_username = get_setting(db, "nzbget_username")
     nzbget_password = get_setting(db, "nzbget_password")
+    nzbget_prefix = get_setting(db, "nzbget_path_prefix")
+    local_prefix = get_setting(db, "local_path_prefix")
 
     pending = db.query(Download).filter(
         Download.status == "sent", Download.nzbget_id.isnot(None)
@@ -152,7 +262,6 @@ async def sync_status(request: Request, db: Session = Depends(get_db)):
     try:
         client = NzbgetClient(nzbget_url, nzbget_username, nzbget_password)
         history = client.get_history()
-        # history items have 'NZBID' and 'Status' fields
         history_by_id = {item.get("NZBID"): item for item in history}
 
         for dl in pending:
@@ -161,6 +270,10 @@ async def sync_status(request: Request, db: Session = Depends(get_db)):
                 raw_status = item.get("Status", "").upper()
                 if "SUCCESS" in raw_status:
                     dl.status = "downloaded"
+                    # Capture the path where nzbget stored the files
+                    final_dir = item.get("FinalDir") or item.get("DestDir", "")
+                    if final_dir:
+                        dl.download_path = _map_path(final_dir, nzbget_prefix, local_prefix)
                 elif "FAILURE" in raw_status or "DELETED" in raw_status:
                     dl.status = "failed"
         db.commit()
@@ -171,4 +284,85 @@ async def sync_status(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         "partials/download_rows.html",
         {"request": request, "downloads": downloads},
+    )
+
+
+@router.get("/{download_id}/convert", response_class=HTMLResponse)
+async def get_convert_form(
+    request: Request,
+    download_id: int,
+    db: Session = Depends(get_db),
+):
+    dl = db.query(Download).filter(Download.id == download_id).first()
+    if not dl:
+        return HTMLResponse('<div class="alert alert-danger">Download not found.</div>')
+    if dl.status != "downloaded":
+        return HTMLResponse('<div class="alert alert-warning">Download must be completed before converting.</div>')
+
+    m4b_output_path = get_setting(db, "m4b_output_path")
+    safe_title = _sanitize_filename(dl.post_title or dl.nzb_name or "output")
+
+    # Suggest output filename
+    suggested_output = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
+
+    return templates.TemplateResponse(
+        "partials/convert_form.html",
+        {
+            "request": request,
+            "dl": dl,
+            "suggested_output": suggested_output,
+        },
+    )
+
+
+@router.post("/{download_id}/convert", response_class=HTMLResponse)
+async def start_convert(
+    request: Request,
+    download_id: int,
+    background_tasks: BackgroundTasks,
+    title: str = Form(default=""),
+    author: str = Form(default=""),
+    series: str = Form(default=""),
+    series_part: str = Form(default=""),
+    input_path: str = Form(default=""),
+    output_file: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    dl = db.query(Download).filter(Download.id == download_id).first()
+    if not dl:
+        return HTMLResponse('<div class="alert alert-danger">Download not found.</div>')
+    if not input_path:
+        return HTMLResponse('<div class="alert alert-warning">Input path is required.</div>')
+    if not output_file:
+        return HTMLResponse('<div class="alert alert-warning">Output file path is required.</div>')
+
+    dl.m4b_status = "converting"
+    db.commit()
+
+    background_tasks.add_task(
+        _run_m4b_conversion,
+        download_id, input_path, output_file, title, author, series, series_part,
+    )
+
+    display_name = title or dl.post_title or dl.nzb_name or f"Download #{download_id}"
+    return HTMLResponse(
+        f'<div class="alert alert-info">'
+        f'<i class="bi bi-arrow-repeat me-2"></i>'
+        f'<strong>{display_name}</strong> is being converted to M4B. '
+        f'Status will update automatically on this page.</div>'
+    )
+
+
+@router.get("/{download_id}/conversion-log", response_class=HTMLResponse)
+async def conversion_log(
+    request: Request,
+    download_id: int,
+    db: Session = Depends(get_db),
+):
+    dl = db.query(Download).filter(Download.id == download_id).first()
+    if not dl or not dl.conversion_log:
+        return HTMLResponse('<p class="text-muted small mb-0">No log available.</p>')
+    escaped = dl.conversion_log.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return HTMLResponse(
+        f'<pre class="bc-raw-text mb-0" style="max-height:300px;overflow-y:auto;font-size:0.75rem;">{escaped}</pre>'
     )
