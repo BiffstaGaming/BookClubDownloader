@@ -174,82 +174,121 @@ async def _run_m4b_conversion(
         m4b_jobs = get_setting(db, "m4b_jobs")
         m4b_bitrate = get_setting(db, "m4b_bitrate")
 
-        audio_dirs = _find_audio_dirs(input_path)
-        log_to_db("DEBUG", "conversion",
-                  f"Audio directories found: {audio_dirs}", download_id=download_id)
+        # ── Pre-flight check ──────────────────────────────────────────────────
+        # If there is already an .m4b in the input folder, use it directly
+        # rather than re-encoding with m4b-tool.
+        existing_m4bs = []
+        for root, _, files in os.walk(input_path):
+            for f in files:
+                if f.lower().endswith(".m4b"):
+                    existing_m4bs.append(os.path.join(root, f))
 
-        cmd = [
-            "m4b-tool", "merge", *audio_dirs,
-            f"--output-file={output_file}",
-            "--no-interaction",
-        ]
-        if title:
-            cmd += [f"--name={title}", f"--album={title}"]
-        if author:
-            cmd += [f"--artist={author}", f"--albumartist={author}"]
-        if series:
-            cmd.append(f"--series={series}")
-        if series_part:
-            cmd.append(f"--series-part={series_part}")
-        if m4b_jobs:
-            cmd.append(f"--jobs={m4b_jobs}")
-        if m4b_bitrate:
-            cmd.append(f"--audio-bitrate={m4b_bitrate}")
+        if existing_m4bs:
+            existing = existing_m4bs[0]
+            log_to_db("INFO", "conversion",
+                      f"Existing .m4b found — skipping m4b-tool: {existing}",
+                      download_id=download_id)
+            log = f"Existing .m4b used: {existing}"
+            returncode = 0
+            _no_files = False
+            # Treat the existing file as the conversion output
+            output_file = existing
+        else:
+            # Check there are actually MP3s to convert before invoking m4b-tool
+            audio_dirs = _find_audio_dirs(input_path)
+            has_mp3s = any(
+                f.lower().endswith(".mp3")
+                for d in audio_dirs
+                for f in os.listdir(d)
+            )
+            if not has_mp3s:
+                log_to_db("ERROR", "conversion",
+                          "No .mp3 or .m4b files found in input path — nothing to convert",
+                          download_id=download_id)
+                dl = db.query(Download).filter(Download.id == download_id).first()
+                if dl:
+                    dl.m4b_status = "m4b_failed"
+                    dl.conversion_log = "No .mp3 or .m4b files found in input path."
+                    db.commit()
+                return
 
-        logger.info("Starting m4b-tool for download #%d: %s", download_id, " ".join(cmd))
-        log_to_db("INFO", "conversion", "Starting m4b-tool conversion", download_id=download_id)
+            log_to_db("DEBUG", "conversion",
+                      f"Audio directories found: {audio_dirs}", download_id=download_id)
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+            cmd = [
+                "m4b-tool", "merge", *audio_dirs,
+                f"--output-file={output_file}",
+                "--no-interaction",
+            ]
+            if title:
+                cmd += [f"--name={title}", f"--album={title}"]
+            if author:
+                cmd += [f"--artist={author}", f"--albumartist={author}"]
+            if series:
+                cmd.append(f"--series={series}")
+            if series_part:
+                cmd.append(f"--series-part={series_part}")
+            if m4b_jobs:
+                cmd.append(f"--jobs={m4b_jobs}")
+            if m4b_bitrate:
+                cmd.append(f"--audio-bitrate={m4b_bitrate}")
 
-        # Stream stdout in chunks and split on \r OR \n so we catch carriage-return
-        # progress bars (m4b-tool uses \r to overwrite the current line in-place).
-        buf = ""
-        log_lines = []
-        last_progress = -1
+            logger.info("Starting m4b-tool for download #%d: %s", download_id, " ".join(cmd))
+            log_to_db("INFO", "conversion", "Starting m4b-tool conversion", download_id=download_id)
 
-        while True:
-            chunk = await proc.stdout.read(512)
-            if not chunk:
-                break
-            buf += chunk.decode("utf-8", errors="replace")
-            # Split on \r\n, \n, or bare \r — keep the last incomplete fragment
-            parts = re.split(r'\r\n|\n|\r', buf)
-            buf = parts[-1]
-            for line in parts[:-1]:
-                if line.strip():
-                    log_lines.append(line)
-                m = re.search(r'\b(\d{1,3})%', line)
-                if m:
-                    pct = min(100, int(m.group(1)))
-                    if pct != last_progress:
-                        last_progress = pct
-                        try:
-                            dl_prog = db.query(Download).filter(Download.id == download_id).first()
-                            if dl_prog:
-                                dl_prog.m4b_progress = pct
-                                db.commit()
-                        except Exception:
-                            pass
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
 
-        if buf.strip():
-            log_lines.append(buf)
+            # Stream stdout in chunks and split on \r OR \n so we catch carriage-return
+            # progress bars (m4b-tool uses \r to overwrite the current line in-place).
+            buf = ""
+            log_lines = []
+            last_progress = -1
 
-        await proc.wait()
-        log = "\n".join(log_lines)
+            while True:
+                chunk = await proc.stdout.read(512)
+                if not chunk:
+                    break
+                buf += chunk.decode("utf-8", errors="replace")
+                # Split on \r\n, \n, or bare \r — keep the last incomplete fragment
+                parts = re.split(r'\r\n|\n|\r', buf)
+                buf = parts[-1]
+                for line in parts[:-1]:
+                    if line.strip():
+                        log_lines.append(line)
+                    m = re.search(r'\b(\d{1,3})%', line)
+                    if m:
+                        pct = min(100, int(m.group(1)))
+                        if pct != last_progress:
+                            last_progress = pct
+                            try:
+                                dl_prog = db.query(Download).filter(Download.id == download_id).first()
+                                if dl_prog:
+                                    dl_prog.m4b_progress = pct
+                                    db.commit()
+                            except Exception:
+                                pass
 
-        # Store the full m4b-tool output as a DEBUG entry linked to this download
-        log_to_db("DEBUG", "conversion", f"m4b-tool output:\n{log}", download_id=download_id)
+            if buf.strip():
+                log_lines.append(buf)
 
-        # m4b-tool sometimes exits 0 even on soft failures — check output too
-        _no_files = "no files to convert" in log.lower()
+            await proc.wait()
+            log = "\n".join(log_lines)
+            returncode = proc.returncode
 
+            # Store the full m4b-tool output as a DEBUG entry linked to this download
+            log_to_db("DEBUG", "conversion", f"m4b-tool output:\n{log}", download_id=download_id)
+
+            # m4b-tool sometimes exits 0 even on soft failures — check output too
+            _no_files = "no files to convert" in log.lower()
+
+        # ── Common success / failure path ─────────────────────────────────────
         dl = db.query(Download).filter(Download.id == download_id).first()
         if dl:
-            if proc.returncode == 0 and not _no_files:
+            if returncode == 0 and not _no_files:
                 final_path = output_file
                 # Move the file if a move template is configured
                 if move_template and os.path.isfile(output_file):
@@ -301,7 +340,7 @@ async def _run_m4b_conversion(
                 if _no_files:
                     reason = "no audio files found in the input path — check subdirectory structure"
                 else:
-                    reason = f"exit code {proc.returncode}"
+                    reason = f"exit code {returncode}"
                 logger.error("m4b-tool failed for download #%d: %s", download_id, reason)
                 log_to_db("ERROR", "conversion", f"m4b-tool failed: {reason} — see DEBUG entry for full output", download_id=download_id)
             dl.conversion_log = log[-4000:]  # keep last 4000 chars
