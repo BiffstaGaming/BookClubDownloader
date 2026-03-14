@@ -20,11 +20,8 @@ DURATION=$(ffprobe -v quiet -show_entries format=duration -of default=noprint_wr
 [ -z "$DURATION" ] && { echo "mp4info: cannot read $1" >&2; exit 1; }\n\
 python3 -c "\n\
 d = float('"'"'$DURATION'"'"')\n\
-h = int(d // 3600)\n\
-m = int((d %% 3600) // 60)\n\
-s = d %% 60\n\
 print('"'"'Track\\tType\\tInfo'"'"')\n\
-print('"'"'Duration: {}:{:02d}:{:06.3f}, 1 audio track'"'"'.format(h, m, s))\n\
+print('"'"'1\\taudio\\tMPEG-4 AAC LC, {:.3f} secs, 128 kbps, 44100 Hz'"'"'.format(d))\n\
 "\n' > /usr/local/bin/mp4info && chmod +x /usr/local/bin/mp4info
 
 # Download m4b-tool and create a wrapper script
