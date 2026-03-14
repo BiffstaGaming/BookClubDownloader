@@ -54,19 +54,59 @@
           </div>
 
           {% if rev.search_term %}
+          <!-- Extracted book metadata -->
+          {% if rev.title or rev.author or rev.series %}
+          <div class="row g-2 mb-3">
+            {% if rev.title %}
+            <div class="col-sm-6">
+              <div class="bc-info-box">
+                <div class="bc-info-label">Title</div>
+                <div class="bc-info-value">{{ rev.title }}</div>
+              </div>
+            </div>
+            {% endif %}
+            {% if rev.author %}
+            <div class="col-sm-6">
+              <div class="bc-info-box">
+                <div class="bc-info-label">Author</div>
+                <div class="bc-info-value">{{ rev.author }}</div>
+              </div>
+            </div>
+            {% endif %}
+            {% if rev.series %}
+            <div class="col-sm-6">
+              <div class="bc-info-box">
+                <div class="bc-info-label">Series</div>
+                <div class="bc-info-value">{{ rev.series }}{% if rev.series_part %} #{{ rev.series_part }}{% endif %}</div>
+              </div>
+            </div>
+            {% endif %}
+            {% if rev.narrator %}
+            <div class="col-sm-6">
+              <div class="bc-info-box">
+                <div class="bc-info-label">Narrator</div>
+                <div class="bc-info-value">{{ rev.narrator }}</div>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
           <!-- Search NZBs buttons -->
           <form
             hx-post="/search/nzb"
             hx-target="#nzb-results"
             hx-swap="innerHTML"
             hx-indicator=".htmx-indicator"
-            hx-include="[name='search_term'],[name='password'],[name='post_title'],[name='topic_id'],[name='msg_id']"
           >
             <input type="hidden" name="search_term" value="{{ rev.search_term }}" />
             <input type="hidden" name="password" value="{{ rev.password or '' }}" />
             <input type="hidden" name="post_title" value="{{ topic.title }}" />
             <input type="hidden" name="topic_id" value="{{ topic.topic_id }}" />
             <input type="hidden" name="msg_id" value="{{ post.msg_id }}" />
+            <input type="hidden" name="book_title" value="{{ rev.title or '' }}" />
+            <input type="hidden" name="book_author" value="{{ rev.author or '' }}" />
+            <input type="hidden" name="book_series" value="{{ rev.series or '' }}" />
+            <input type="hidden" name="book_series_part" value="{{ rev.series_part or '' }}" />
             <div class="d-flex gap-2 flex-wrap">
               <button type="submit" name="nzb_source" value="nzbking" class="btn bc-btn-primary">
                 <i class="bi bi-search me-1"></i>Search NZBKing

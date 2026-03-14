@@ -389,6 +389,10 @@ async def send_to_nzbget(
     post_title: str = Form(default=""),
     topic_id: str = Form(default=""),
     msg_id: str = Form(default=""),
+    book_title: str = Form(default=""),
+    book_author: str = Form(default=""),
+    book_series: str = Form(default=""),
+    book_series_part: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
     # Retrieve NZBGet settings
@@ -452,6 +456,13 @@ async def send_to_nzbget(
         )
 
     # Step 3: Save to DB
+    # Pre-populate download_metadata from forum post if any fields were extracted
+    initial_metadata = {}
+    if book_title:       initial_metadata["title"]       = book_title
+    if book_author:      initial_metadata["author"]      = book_author
+    if book_series:      initial_metadata["series"]      = book_series
+    if book_series_part: initial_metadata["series_part"] = book_series_part
+
     record = Download(
         post_title=post_title,
         topic_id=topic_id,
@@ -462,6 +473,7 @@ async def send_to_nzbget(
         nzb_hash=nzb_hash,
         nzbget_id=job_id,
         status="sent",
+        download_metadata=json.dumps(initial_metadata, ensure_ascii=False) if initial_metadata else None,
     )
     db.add(record)
     db.commit()
@@ -576,10 +588,12 @@ async def metadata_lookup(
 
     lookup_error = None
     if abs_url and abs_token:
-        query = dl.search_term or dl.post_title or dl.nzb_name or ""
+        # Prefer human-readable title/author from forum metadata over the NZB search term
+        query_title  = saved.get("title")  or dl.post_title or dl.nzb_name or ""
+        query_author = saved.get("author") or ""
         try:
             client = AbsClient(abs_url, abs_token)
-            results = client.search_books(query.strip())
+            results = client.search_books(query_title.strip(), author=query_author.strip())
             if results:
                 book = results[0]
                 # ABS returns author as a string field (varies by provider)
@@ -596,7 +610,7 @@ async def metadata_lookup(
                     saved["series_part"] = str(book.get("volumeNumber") or saved.get("series_part", ""))
                 log_to_db("INFO", "metadata", f"Audible lookup for #{download_id}: {saved.get('title')} by {saved.get('author')}", download_id=download_id)
             else:
-                lookup_error = f"No Audible results found for: {query}"
+                lookup_error = f"No Audible results found for: {query_title}"
         except Exception as exc:
             logger.warning("metadata_lookup failed for download %d: %s", download_id, exc)
             lookup_error = f"Lookup failed: {exc}"

@@ -280,15 +280,55 @@ class AbookScraper:
 
     def _parse_unhiddenbox(self, unhiddenbox) -> dict:
         """
-        Extract search_term and password from an unhiddenbox div.
+        Extract search_term, password, and structured book metadata from
+        an unhiddenbox div.
+
         The box contains two <code class="bbc_code"> tags:
           1st: search term, e.g. "PW - RJ-THF06-VTNCSP"
           2nd: password,    e.g. "Per.Ardua.Ad.Astra"
+
+        The rest of the text contains structured fields like:
+          Title:           The Vatican Conspiracy
+          Author:          Rob Jones
+          Series Name:     The Hunter Files
+          Series Position: 06
         """
         codes = unhiddenbox.find_all("code", class_="bbc_code")
         search_term = codes[0].get_text(strip=True) if len(codes) > 0 else ""
         password = codes[1].get_text(strip=True) if len(codes) > 1 else ""
         # Strip leading "PW - " prefix from search term
         search_term = re.sub(r"^PW\s*-\s*", "", search_term).strip()
-        logger.info("_parse_unhiddenbox: search_term=%r password=%r", search_term, password)
-        return {"search_term": search_term, "password": password}
+
+        # Extract structured metadata from the raw text block
+        raw = unhiddenbox.get_text(separator="\n")
+
+        def _field(pattern):
+            m = re.search(pattern, raw, re.I | re.MULTILINE)
+            return m.group(1).strip() if m else ""
+
+        title       = _field(r"^Title\s*:\s*(.+)$")
+        author      = _field(r"^Author\s*:\s*(.+)$")
+        series      = _field(r"^Series\s*Name\s*:\s*(.+)$")
+        series_part = _field(r"^Series\s*Position\s*:\s*(.+)$")
+        narrator    = _field(r"^Read\s*By\s*:\s*(.+)$")
+
+        # Normalise series_part: strip leading zeros but keep "1", "06" → "6"
+        if series_part:
+            try:
+                series_part = str(int(series_part))
+            except ValueError:
+                pass  # leave as-is if it's not a plain number
+
+        logger.info(
+            "_parse_unhiddenbox: search_term=%r title=%r author=%r series=%r part=%r",
+            search_term, title, author, series, series_part,
+        )
+        return {
+            "search_term": search_term,
+            "password":    password,
+            "title":       title,
+            "author":      author,
+            "series":      series,
+            "series_part": series_part,
+            "narrator":    narrator,
+        }

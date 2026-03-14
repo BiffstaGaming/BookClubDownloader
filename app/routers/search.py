@@ -131,8 +131,13 @@ async def thank_post(
     revealed_posts = {
         msg_id: {
             "search_term": revealed.get("search_term", ""),
-            "password": revealed.get("password", ""),
-            "raw_text": revealed.get("raw_text", ""),
+            "password":    revealed.get("password", ""),
+            "raw_text":    revealed.get("raw_text", ""),
+            "title":       revealed.get("title", ""),
+            "author":      revealed.get("author", ""),
+            "series":      revealed.get("series", ""),
+            "series_part": revealed.get("series_part", ""),
+            "narrator":    revealed.get("narrator", ""),
         }
     }
 
@@ -156,6 +161,10 @@ async def search_nzb(
     post_title: str = Form(default=""),
     topic_id: str = Form(default=""),
     msg_id: str = Form(default=""),
+    book_title: str = Form(default=""),
+    book_author: str = Form(default=""),
+    book_series: str = Form(default=""),
+    book_series_part: str = Form(default=""),
 ):
     if not search_term.strip():
         return HTMLResponse(
@@ -194,5 +203,9 @@ async def search_nzb(
             "post_title": post_title,
             "topic_id": topic_id,
             "msg_id": msg_id,
+            "book_title": book_title,
+            "book_author": book_author,
+            "book_series": book_series,
+            "book_series_part": book_series_part,
         },
     )
