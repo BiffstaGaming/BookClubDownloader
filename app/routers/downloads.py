@@ -277,6 +277,20 @@ async def _run_m4b_conversion(
                             except Exception:
                                 pass
 
+                # Also check the incomplete buffer fragment for progress updates
+                m = re.search(r'\b(\d{1,3})%', buf)
+                if m:
+                    pct = min(100, int(m.group(1)))
+                    if pct != last_progress:
+                        last_progress = pct
+                        try:
+                            dl_prog = db.query(Download).filter(Download.id == download_id).first()
+                            if dl_prog:
+                                dl_prog.m4b_progress = pct
+                                db.commit()
+                        except Exception:
+                            pass
+
             if buf.strip():
                 log_lines.append(buf)
 
