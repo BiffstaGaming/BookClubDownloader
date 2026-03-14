@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy import Column, Integer, String, Text, DateTime, Index
 from app.database import Base
 
 
@@ -30,3 +30,19 @@ class Download(Base):
     m4b_status = Column(String, nullable=True)
     m4b_path = Column(Text, nullable=True)
     conversion_log = Column(Text, nullable=True)
+
+
+class LogEntry(Base):
+    __tablename__ = "logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    level = Column(String(10), nullable=False)       # DEBUG, INFO, WARNING, ERROR
+    source = Column(String(100), nullable=True)      # logger name / component
+    message = Column(Text, nullable=False)
+    download_id = Column(Integer, nullable=True)     # linked download, if any
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_logs_level", "level"),
+        Index("ix_logs_created_at", "created_at"),
+    )

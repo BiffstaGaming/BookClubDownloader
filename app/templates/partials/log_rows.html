@@ -1,0 +1,46 @@
+{% if entries %}
+{% for entry in entries %}
+<tr>
+  <td class="text-muted" style="white-space:nowrap;font-size:0.75rem;">
+    {{ entry.created_at.strftime("%Y-%m-%d %H:%M:%S") if entry.created_at else "—" }}
+  </td>
+  <td>
+    {% if entry.level == "ERROR" %}
+    <span class="badge bc-badge-danger">ERROR</span>
+    {% elif entry.level == "WARNING" %}
+    <span class="badge" style="background:var(--warning-dim);color:var(--warning);font-weight:600;">WARN</span>
+    {% elif entry.level == "INFO" %}
+    <span class="badge" style="background:var(--accent-dim);color:var(--accent);font-weight:600;">INFO</span>
+    {% elif entry.level == "DEBUG" %}
+    <span class="badge bc-badge-muted">DEBUG</span>
+    {% else %}
+    <span class="badge bc-badge-muted">{{ entry.level }}</span>
+    {% endif %}
+  </td>
+  <td>
+    <code class="bc-code" style="font-size:0.72rem;">{{ entry.source or "—" }}</code>
+  </td>
+  <td style="word-break:break-word;max-width:600px;">
+    {% if "\n" in (entry.message or "") %}
+    <details>
+      <summary style="cursor:pointer;color:var(--text-muted);font-size:0.8rem;">
+        {{ (entry.message or "").splitlines()[0][:120] }}…
+      </summary>
+      <pre class="bc-raw-text mt-2 mb-0" style="font-size:0.72rem;max-height:250px;">{{ entry.message }}</pre>
+    </details>
+    {% else %}
+    {{ entry.message }}
+    {% endif %}
+  </td>
+  <td class="text-muted" style="font-size:0.75rem;">
+    {% if entry.download_id %}
+    <code class="bc-code">#{{ entry.download_id }}</code>
+    {% else %}—{% endif %}
+  </td>
+</tr>
+{% endfor %}
+{% else %}
+<tr>
+  <td colspan="5" class="text-center text-muted py-4">No log entries.</td>
+</tr>
+{% endif %}

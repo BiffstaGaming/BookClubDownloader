@@ -14,6 +14,7 @@ from app.models import Download
 from app.scrapers.nzbking import NzbkingScraper
 from app.services.nzbget import NzbgetClient
 from app.routers.settings import get_setting
+from app.log_handler import log_to_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -101,7 +102,8 @@ async def _run_m4b_conversion(
         if series_part:
             cmd.append(f"--series-part={series_part}")
 
-        logger.info("Starting m4b-tool: %s", " ".join(cmd))
+        logger.info("Starting m4b-tool for download #%d: %s", download_id, " ".join(cmd))
+        log_to_db("INFO", "conversion", f"Starting m4b-tool conversion", download_id=download_id)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -109,6 +111,9 @@ async def _run_m4b_conversion(
         )
         stdout, _ = await proc.communicate()
         log = stdout.decode("utf-8", errors="replace")
+
+        # Store the full m4b-tool output as a DEBUG entry linked to this download
+        log_to_db("DEBUG", "conversion", f"m4b-tool output:\n{log}", download_id=download_id)
 
         dl = db.query(Download).filter(Download.id == download_id).first()
         if dl:
@@ -128,6 +133,7 @@ async def _run_m4b_conversion(
                     except Exception as move_exc:
                         logger.warning("Could not move M4B to %s: %s", dest, move_exc)
                         log += f"\n[Move failed: {move_exc}]"
+                        log_to_db("ERROR", "conversion", f"Move failed to {dest}: {move_exc}", download_id=download_id)
                         dl.m4b_status = "move_failed"
                         dl.m4b_path = output_file  # file still exists here
                         dl.conversion_log = log[-4000:]
@@ -135,10 +141,12 @@ async def _run_m4b_conversion(
                         return
                 dl.m4b_status = "converted"
                 dl.m4b_path = final_path
-                logger.info("M4B conversion done for download %d: %s", download_id, final_path)
+                logger.info("M4B conversion complete for download #%d: %s", download_id, final_path)
+                log_to_db("INFO", "conversion", f"M4B ready at: {final_path}", download_id=download_id)
             else:
                 dl.m4b_status = "m4b_failed"
-                logger.error("m4b-tool returned %d for download %d", proc.returncode, download_id)
+                logger.error("m4b-tool exited with code %d for download #%d — check DEBUG log for output", proc.returncode, download_id)
+                log_to_db("ERROR", "conversion", f"m4b-tool failed (exit code {proc.returncode}) — see DEBUG entry for full output", download_id=download_id)
             dl.conversion_log = log[-4000:]  # keep last 4000 chars
             db.commit()
     except Exception as exc:
