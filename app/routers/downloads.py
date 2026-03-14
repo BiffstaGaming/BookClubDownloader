@@ -596,17 +596,33 @@ async def metadata_lookup(
             results = client.search_books(query_title.strip(), author=query_author.strip())
             if results:
                 book = results[0]
+                log_to_db("DEBUG", "metadata", f"Audible raw result: {json.dumps(book, ensure_ascii=False)}", download_id=download_id)
 
-                # Extract series/volumeNumber from Audible result
+                # Extract series/position from Audible result.
+                # ABS/audnexus may use different key names depending on version:
+                #   series: string or [{name/series, volumeNumber/sequence/position}]
+                #   position: volumeNumber | sequence | position (at list item or top level)
                 audible_series = ""
                 audible_series_part = ""
                 series_raw = book.get("series")
+
+                def _pick(*keys):
+                    """Return the first non-empty value found among the given keys."""
+                    for k in keys:
+                        v = book.get(k)
+                        if v:
+                            return str(v)
+                    return ""
+
                 if isinstance(series_raw, list) and series_raw:
-                    audible_series      = series_raw[0].get("series") or series_raw[0].get("name", "")
-                    audible_series_part = str(series_raw[0].get("volumeNumber", ""))
+                    s = series_raw[0]
+                    audible_series = s.get("name") or s.get("series") or ""
+                    audible_series_part = str(
+                        s.get("position") or s.get("volumeNumber") or s.get("sequence") or ""
+                    )
                 elif isinstance(series_raw, str):
-                    audible_series      = series_raw
-                    audible_series_part = str(book.get("volumeNumber", ""))
+                    audible_series = series_raw
+                    audible_series_part = _pick("volumeNumber", "sequence", "position", "seriesSequence")
 
                 audible_author = book.get("author") or book.get("authors") or ""
 
