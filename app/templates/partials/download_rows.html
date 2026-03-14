@@ -67,7 +67,7 @@
     {% endif %}
   </td>
   <td>
-    {% set conf = dl.metadata.get('match_confidence') %}
+    {% set conf = dl.parsed_metadata.get('match_confidence') %}
     {% if conf is not none %}
       {% if conf >= 90 %}
       <span class="badge" style="background:rgba(46,160,67,0.2);color:#3fb950;border:1px solid rgba(46,160,67,0.3);" title="Auto-matched">

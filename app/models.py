@@ -36,7 +36,7 @@ class Download(Base):
     conversion_log = Column(Text, nullable=True)
 
     @property
-    def metadata(self) -> dict:
+    def parsed_metadata(self) -> dict:
         """Parsed download_metadata JSON, or empty dict."""
         if self.download_metadata:
             try:
