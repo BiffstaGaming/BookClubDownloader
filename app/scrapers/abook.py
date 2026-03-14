@@ -303,14 +303,14 @@ class AbookScraper:
         raw = unhiddenbox.get_text(separator="\n")
 
         def _field(pattern):
-            m = re.search(pattern, raw, re.I | re.MULTILINE)
+            m = re.search(pattern, raw, re.I)
             return m.group(1).strip() if m else ""
 
-        title       = _field(r"^Title\s*:\s*(.+)$")
-        author      = _field(r"^Author\s*:\s*(.+)$")
-        series      = _field(r"^Series\s*Name\s*:\s*(.+)$")
-        series_part = _field(r"^Series\s*Position\s*:\s*(.+)$")
-        narrator    = _field(r"^Read\s*By\s*:\s*(.+)$")
+        title       = _field(r"(?:^|\n)\s*Title\s*:\s*(.+)")
+        author      = _field(r"(?:^|\n)\s*Author\s*:\s*(.+)")
+        series      = _field(r"(?:^|\n)\s*Series\s*Name\s*:\s*(.+)")
+        series_part = _field(r"(?:^|\n)\s*Series\s*Position\s*:\s*(.+)")
+        narrator    = _field(r"(?:^|\n)\s*Read\s*By\s*:\s*(.+)")
 
         # Normalise series_part: strip leading zeros but keep "1", "06" → "6"
         if series_part:
