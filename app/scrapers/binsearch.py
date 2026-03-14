@@ -72,6 +72,12 @@ class BinsearchScraper:
                     if href:
                         detail_url = BINSEARCH_BASE + href
 
+                # Size: first <span class="...bg-white"> in the metadata badge row
+                size = ""
+                size_span = row.find("span", class_=lambda c: c and "bg-white" in c)
+                if size_span:
+                    size = size_span.get_text(strip=True)
+
                 # Age: <td class="min-w-20">
                 age = ""
                 age_cell = row.find("td", class_=lambda c: c and "min-w-20" in c)
@@ -81,7 +87,7 @@ class BinsearchScraper:
                 results.append({
                     "nzb_hash": nzb_hash,
                     "title": title or nzb_hash,
-                    "size": "",
+                    "size": size,
                     "age": age,
                     "detail_url": detail_url,
                     "source": "binsearch",
