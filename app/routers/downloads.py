@@ -105,6 +105,9 @@ async def _run_m4b_conversion(
     db = SessionLocal()
     try:
         move_template = get_setting(db, "m4b_move_template")
+        m4b_jobs = get_setting(db, "m4b_jobs")
+        m4b_bitrate = get_setting(db, "m4b_bitrate")
+
         audio_dirs = _find_audio_dirs(input_path)
         log_to_db("DEBUG", "conversion",
                   f"Audio directories found: {audio_dirs}", download_id=download_id)
@@ -122,16 +125,44 @@ async def _run_m4b_conversion(
             cmd.append(f"--series={series}")
         if series_part:
             cmd.append(f"--series-part={series_part}")
+        if m4b_jobs:
+            cmd.append(f"--jobs={m4b_jobs}")
+        if m4b_bitrate:
+            cmd.append(f"--audio-bitrate={m4b_bitrate}")
 
         logger.info("Starting m4b-tool for download #%d: %s", download_id, " ".join(cmd))
-        log_to_db("INFO", "conversion", f"Starting m4b-tool conversion", download_id=download_id)
+        log_to_db("INFO", "conversion", "Starting m4b-tool conversion", download_id=download_id)
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await proc.communicate()
-        log = stdout.decode("utf-8", errors="replace")
+
+        # Stream stdout line-by-line and parse progress percentage in real time
+        log_lines = []
+        last_progress = -1
+        while True:
+            line_bytes = await proc.stdout.readline()
+            if not line_bytes:
+                break
+            line = line_bytes.decode("utf-8", errors="replace")
+            log_lines.append(line)
+            m = re.search(r'\b(\d{1,3})%', line)
+            if m:
+                pct = min(100, int(m.group(1)))
+                if pct != last_progress:
+                    last_progress = pct
+                    try:
+                        dl_prog = db.query(Download).filter(Download.id == download_id).first()
+                        if dl_prog:
+                            dl_prog.m4b_progress = pct
+                            db.commit()
+                    except Exception:
+                        pass
+
+        await proc.wait()
+        log = "".join(log_lines)
 
         # Store the full m4b-tool output as a DEBUG entry linked to this download
         log_to_db("DEBUG", "conversion", f"m4b-tool output:\n{log}", download_id=download_id)

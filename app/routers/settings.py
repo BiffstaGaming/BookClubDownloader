@@ -25,6 +25,8 @@ SETTING_KEYS = [
     "local_path_prefix",
     "m4b_output_path",
     "m4b_move_template",
+    "m4b_jobs",
+    "m4b_bitrate",
 ]
 
 
@@ -69,6 +71,8 @@ async def save_settings(
     local_path_prefix: str = Form(default=""),
     m4b_output_path: str = Form(default=""),
     m4b_move_template: str = Form(default=""),
+    m4b_jobs: str = Form(default=""),
+    m4b_bitrate: str = Form(default=""),
 ):
     values = {
         "abook_url": abook_url,
@@ -82,6 +86,8 @@ async def save_settings(
         "local_path_prefix": local_path_prefix,
         "m4b_output_path": m4b_output_path,
         "m4b_move_template": m4b_move_template,
+        "m4b_jobs": m4b_jobs,
+        "m4b_bitrate": m4b_bitrate,
     }
     for key, value in values.items():
         set_setting(db, key, value)

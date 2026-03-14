@@ -28,6 +28,7 @@ class Download(Base):
     # M4B conversion fields
     download_path = Column(Text, nullable=True)
     m4b_status = Column(String, nullable=True)
+    m4b_progress = Column(Integer, nullable=True)
     m4b_path = Column(Text, nullable=True)
     conversion_log = Column(Text, nullable=True)
 

@@ -37,7 +37,7 @@
     {% if dl.m4b_status == "converting" %}
     <div class="mt-1">
       <span class="badge" style="background:var(--accent);color:#fff;">
-        <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;" role="status"></span>Converting…
+        <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;" role="status"></span>Converting{% if dl.m4b_progress is not none %} {{ dl.m4b_progress }}%{% else %}…{% endif %}
       </span>
     </div>
     {% elif dl.m4b_status == "converted" %}

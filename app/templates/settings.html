@@ -218,6 +218,41 @@
             />
             <div class="form-text text-muted">Working directory where m4b-tool writes the file during conversion.</div>
           </div>
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              <label for="m4b_jobs" class="form-label bc-label">Parallel Jobs</label>
+              <input
+                type="number"
+                class="form-control bc-input"
+                id="m4b_jobs"
+                name="m4b_jobs"
+                value="{{ settings.get('m4b_jobs', '') }}"
+                placeholder="1"
+                min="1"
+                max="32"
+              />
+              <div class="form-text text-muted">
+                Number of chapters to encode in parallel (<code>--jobs</code>).
+                Set to your CPU core count for fastest conversion. Default: 1.
+              </div>
+            </div>
+            <div class="col-sm-6">
+              <label for="m4b_bitrate" class="form-label bc-label">Audio Bitrate</label>
+              <input
+                type="text"
+                class="form-control bc-input"
+                id="m4b_bitrate"
+                name="m4b_bitrate"
+                value="{{ settings.get('m4b_bitrate', '') }}"
+                placeholder="128k"
+              />
+              <div class="form-text text-muted">
+                e.g. <code>64k</code>, <code>128k</code>. Lower = faster + smaller file.
+                64k is fine for audiobooks. Default: 128k.
+              </div>
+            </div>
+          </div>
+
           <div class="mb-0">
             <label for="m4b_move_template" class="form-label bc-label">Move After Conversion (optional)</label>
             <input
