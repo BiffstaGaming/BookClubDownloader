@@ -28,7 +28,14 @@
     {% if dl.status == "downloaded" %}
     <span class="badge bc-badge-success"><i class="bi bi-check-circle-fill me-1"></i>Downloaded</span>
     {% elif dl.status == "sent" %}
-    <span class="badge" style="background:var(--accent);color:#fff;"><i class="bi bi-arrow-down-circle me-1"></i>Downloading</span>
+    <span class="badge" style="background:var(--accent);color:#fff;">
+      <i class="bi bi-arrow-down-circle me-1"></i>Downloading{% if dl.download_progress is not none %} {{ dl.download_progress }}%{% endif %}
+    </span>
+    {% if dl.download_progress is not none %}
+    <div class="progress mt-1" style="height:3px;max-width:100px;">
+      <div class="progress-bar" style="width:{{ dl.download_progress }}%;background:var(--accent);"></div>
+    </div>
+    {% endif %}
     {% elif dl.status == "failed" %}
     <span class="badge bc-badge-danger"><i class="bi bi-x-circle-fill me-1"></i>Failed</span>
     {% else %}
@@ -39,6 +46,11 @@
       <span class="badge" style="background:var(--accent);color:#fff;">
         <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;" role="status"></span>Converting{% if dl.m4b_progress is not none %} {{ dl.m4b_progress }}%{% else %}…{% endif %}
       </span>
+      {% if dl.m4b_progress is not none %}
+      <div class="progress mt-1" style="height:3px;max-width:100px;">
+        <div class="progress-bar" style="width:{{ dl.m4b_progress }}%;background:var(--accent);"></div>
+      </div>
+      {% endif %}
     </div>
     {% elif dl.m4b_status == "converted" %}
     <div class="mt-1">

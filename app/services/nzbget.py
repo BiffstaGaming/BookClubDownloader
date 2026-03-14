@@ -98,3 +98,8 @@ class NzbgetClient:
         """Return nzbget's download history list."""
         result = self._rpc("history", [False])
         return result if isinstance(result, list) else []
+
+    def get_queue(self) -> list:
+        """Return nzbget's active download queue (listgroups)."""
+        result = self._rpc("listgroups", [0])
+        return result if isinstance(result, list) else []

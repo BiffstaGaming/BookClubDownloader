@@ -28,6 +28,7 @@ class Download(Base):
     # M4B conversion fields
     download_path = Column(Text, nullable=True)
     download_metadata = Column(Text, nullable=True)  # JSON: title/author/series/paths
+    download_progress = Column(Integer, nullable=True)  # 0-100 while status == "sent"
     m4b_status = Column(String, nullable=True)
     m4b_progress = Column(Integer, nullable=True)
     m4b_path = Column(Text, nullable=True)

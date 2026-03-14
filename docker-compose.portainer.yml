@@ -9,6 +9,8 @@ services:
       - "9933:9933"
     volumes:
       - bookclub_data:/app/data
+      - /mnt/metadata-nvme/downloads:/downloads
+      - /mnt/mediaStorage:/Media
     restart: unless-stopped
 
 volumes:
