@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.scrapers.abook import AbookScraper
 from app.scrapers.nzbking import NzbkingScraper
+from app.scrapers.binsearch import BinsearchScraper
 from app.routers.settings import get_setting
 
 logger = logging.getLogger(__name__)
@@ -161,16 +163,35 @@ async def search_nzb(
             "No search term provided.</div>"
         )
 
-    try:
-        scraper = NzbkingScraper()
-        results = scraper.search(search_term.strip())
-    except Exception as exc:
-        logger.error("NZB search error for '%s': %s", search_term, exc)
-        return HTMLResponse(
-            f'<div class="alert alert-danger">'
-            f'<i class="bi bi-exclamation-triangle-fill me-2"></i>'
-            f"NZB search failed: {exc}</div>"
-        )
+    term = search_term.strip()
+
+    def _search_nzbking():
+        try:
+            results = NzbkingScraper().search(term)
+            for r in results:
+                r["source"] = "nzbking"
+            return results
+        except Exception as exc:
+            logger.error("NZBKing search error for '%s': %s", term, exc)
+            return []
+
+    def _search_binsearch():
+        try:
+            results = BinsearchScraper().search(term)
+            # source already set by scraper, but ensure it's present
+            for r in results:
+                r.setdefault("source", "binsearch")
+            return results
+        except Exception as exc:
+            logger.error("Binsearch search error for '%s': %s", term, exc)
+            return []
+
+    nzbking_results, binsearch_results = await asyncio.gather(
+        asyncio.to_thread(_search_nzbking),
+        asyncio.to_thread(_search_binsearch),
+    )
+
+    results = nzbking_results + binsearch_results
 
     return templates.TemplateResponse(
         "partials/nzb_results.html",

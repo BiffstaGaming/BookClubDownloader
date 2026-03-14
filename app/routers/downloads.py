@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal, get_db
 from app.models import Download
 from app.scrapers.nzbking import NzbkingScraper
+from app.scrapers.binsearch import BinsearchScraper
 from app.services.nzbget import NzbgetClient
 from app.routers.settings import get_setting
 from app.log_handler import log_to_db
@@ -364,6 +365,7 @@ async def send_to_nzbget(
     request: Request,
     nzb_hash: str = Form(...),
     nzb_title: str = Form(...),
+    nzb_source: str = Form(default="nzbking"),
     search_term: str = Form(default=""),
     password: str = Form(default=""),
     post_title: str = Form(default=""),
@@ -385,10 +387,12 @@ async def send_to_nzbget(
             '<a href="/settings" class="alert-link">Go to Settings</a></div>'
         )
 
-    # Step 1: Download the NZB file
+    # Step 1: Download the NZB file from the appropriate source
     try:
-        nzb_scraper = NzbkingScraper()
-        nzb_content = nzb_scraper.download_nzb(nzb_hash)
+        if nzb_source == "binsearch":
+            nzb_content = BinsearchScraper().download_nzb(nzb_hash)
+        else:
+            nzb_content = NzbkingScraper().download_nzb(nzb_hash)
     except Exception as exc:
         logger.error("Failed to download NZB %s: %s", nzb_hash, exc)
         return HTMLResponse(

@@ -18,6 +18,7 @@
         <thead>
           <tr>
             <th>Title</th>
+            <th style="width:80px;">Source</th>
             <th style="width:110px;">Size</th>
             <th style="width:100px;">Age</th>
             <th class="text-end" style="width:160px;">Action</th>
@@ -38,6 +39,13 @@
               ><i class="bi bi-box-arrow-up-right small"></i></a>
               {% endif %}
             </td>
+            <td>
+              {% if nzb.source == "binsearch" %}
+              <span class="badge bg-secondary text-white" title="binsearch.net">Binsearch</span>
+              {% else %}
+              <span class="badge bg-primary text-white" title="nzbking.com">NZBKing</span>
+              {% endif %}
+            </td>
             <td class="text-muted small">{{ nzb.size or "—" }}</td>
             <td class="text-muted small">{{ nzb.age or "—" }}</td>
             <td class="text-end">
@@ -49,6 +57,7 @@
                 class="d-inline"
               >
                 <input type="hidden" name="nzb_hash" value="{{ nzb.nzb_hash }}" />
+                <input type="hidden" name="nzb_source" value="{{ nzb.source or 'nzbking' }}" />
                 <input type="hidden" name="nzb_title" value="{{ nzb.title }}" />
                 <input type="hidden" name="search_term" value="{{ search_term }}" />
                 <input type="hidden" name="password" value="{{ password or '' }}" />
