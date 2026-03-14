@@ -136,9 +136,12 @@ async def _run_m4b_conversion(
         # Store the full m4b-tool output as a DEBUG entry linked to this download
         log_to_db("DEBUG", "conversion", f"m4b-tool output:\n{log}", download_id=download_id)
 
+        # m4b-tool sometimes exits 0 even on soft failures — check output too
+        _no_files = "no files to convert" in log.lower()
+
         dl = db.query(Download).filter(Download.id == download_id).first()
         if dl:
-            if proc.returncode == 0:
+            if proc.returncode == 0 and not _no_files:
                 final_path = output_file
                 # Move the file if a move template is configured
                 if move_template and os.path.isfile(output_file):
@@ -166,8 +169,12 @@ async def _run_m4b_conversion(
                 log_to_db("INFO", "conversion", f"M4B ready at: {final_path}", download_id=download_id)
             else:
                 dl.m4b_status = "m4b_failed"
-                logger.error("m4b-tool exited with code %d for download #%d — check DEBUG log for output", proc.returncode, download_id)
-                log_to_db("ERROR", "conversion", f"m4b-tool failed (exit code {proc.returncode}) — see DEBUG entry for full output", download_id=download_id)
+                if _no_files:
+                    reason = "no audio files found in the input path — check subdirectory structure"
+                else:
+                    reason = f"exit code {proc.returncode}"
+                logger.error("m4b-tool failed for download #%d: %s", download_id, reason)
+                log_to_db("ERROR", "conversion", f"m4b-tool failed: {reason} — see DEBUG entry for full output", download_id=download_id)
             dl.conversion_log = log[-4000:]  # keep last 4000 chars
             db.commit()
     except Exception as exc:
