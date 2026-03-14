@@ -54,22 +54,27 @@
           </div>
 
           {% if rev.search_term %}
-          <!-- Search NZBs button -->
+          <!-- Search NZBs buttons -->
           <form
             hx-post="/search/nzb"
             hx-target="#nzb-results"
             hx-swap="innerHTML"
             hx-indicator=".htmx-indicator"
-            class="d-inline"
+            hx-include="[name='search_term'],[name='password'],[name='post_title'],[name='topic_id'],[name='msg_id']"
           >
             <input type="hidden" name="search_term" value="{{ rev.search_term }}" />
             <input type="hidden" name="password" value="{{ rev.password or '' }}" />
             <input type="hidden" name="post_title" value="{{ topic.title }}" />
             <input type="hidden" name="topic_id" value="{{ topic.topic_id }}" />
             <input type="hidden" name="msg_id" value="{{ post.msg_id }}" />
-            <button type="submit" class="btn bc-btn-primary">
-              <i class="bi bi-search me-1"></i>Search NZBs for "{{ rev.search_term }}"
-            </button>
+            <div class="d-flex gap-2 flex-wrap">
+              <button type="submit" name="nzb_source" value="nzbking" class="btn bc-btn-primary">
+                <i class="bi bi-search me-1"></i>Search NZBKing
+              </button>
+              <button type="submit" name="nzb_source" value="binsearch" class="btn bc-btn-outline">
+                <i class="bi bi-search me-1"></i>Search Binsearch
+              </button>
+            </div>
           </form>
           {% else %}
           <div class="alert alert-warning py-2 mb-0">

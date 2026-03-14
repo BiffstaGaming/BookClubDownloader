@@ -151,6 +151,7 @@ async def thank_post(
 async def search_nzb(
     request: Request,
     search_term: str = Form(...),
+    nzb_source: str = Form(default="nzbking"),
     password: str = Form(default=""),
     post_title: str = Form(default=""),
     topic_id: str = Form(default=""),
@@ -165,33 +166,23 @@ async def search_nzb(
 
     term = search_term.strip()
 
-    def _search_nzbking():
-        try:
-            results = NzbkingScraper().search(term)
-            for r in results:
-                r["source"] = "nzbking"
-            return results
-        except Exception as exc:
-            logger.error("NZBKing search error for '%s': %s", term, exc)
-            return []
-
-    def _search_binsearch():
-        try:
-            results = BinsearchScraper().search(term)
-            # source already set by scraper, but ensure it's present
+    try:
+        if nzb_source == "binsearch":
+            results = await asyncio.to_thread(BinsearchScraper().search, term)
             for r in results:
                 r.setdefault("source", "binsearch")
-            return results
-        except Exception as exc:
-            logger.error("Binsearch search error for '%s': %s", term, exc)
-            return []
-
-    nzbking_results, binsearch_results = await asyncio.gather(
-        asyncio.to_thread(_search_nzbking),
-        asyncio.to_thread(_search_binsearch),
-    )
-
-    results = nzbking_results + binsearch_results
+        else:
+            results = await asyncio.to_thread(NzbkingScraper().search, term)
+            for r in results:
+                r["source"] = "nzbking"
+    except Exception as exc:
+        source_label = "Binsearch" if nzb_source == "binsearch" else "NZBKing"
+        logger.error("%s search error for '%s': %s", source_label, term, exc)
+        return HTMLResponse(
+            f'<div class="alert alert-danger">'
+            f'<i class="bi bi-exclamation-triangle-fill me-2"></i>'
+            f"{source_label} search failed: {exc}</div>"
+        )
 
     return templates.TemplateResponse(
         "partials/nzb_results.html",
