@@ -8,7 +8,7 @@ import unicodedata
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import and_, not_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
@@ -501,10 +501,17 @@ async def downloads_page(request: Request, db: Session = Depends(get_db)):
 def _apply_dl_filter(q, dl_filter: str):
     """Apply status filter to a Download query."""
     if dl_filter == "active":
-        # Show anything that isn't done (downloaded+converted) or failed
+        # Show: downloading (sent) OR downloaded-but-not-yet-converted
+        # NULL m4b_status must be handled explicitly — SQL NULL != 'converted' evaluates to NULL not TRUE
         q = q.filter(
-            not_(and_(Download.status == "downloaded", Download.m4b_status == "converted"))
-        ).filter(Download.status != "failed")
+            or_(
+                Download.status == "sent",
+                and_(
+                    Download.status == "downloaded",
+                    or_(Download.m4b_status.is_(None), Download.m4b_status != "converted"),
+                ),
+            )
+        )
     return q
 
 
