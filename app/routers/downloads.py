@@ -241,11 +241,13 @@ async def _auto_process_download(download_id: int):
         m4b_output = get_setting(db, "m4b_output_path")
 
         nzb_name   = dl.post_title or dl.nzb_name or ""
-        nzb_title  = _extract_nzb_title(nzb_name)
-        # NZB name is the most reliable source at download-complete time —
-        # forum metadata can be wrong (e.g. series name stored as author).
-        # Use saved author only as a fallback when NZB extraction yields nothing.
-        nzb_author = _extract_nzb_author(nzb_name) or saved.get("author", "")
+        nzb_title, nzb_author_from_name = _parse_nzb_name(nzb_name)
+        # NZB filename is the most reliable source — forum metadata can be wrong.
+        # Ignore saved author if it looks like a series designation (ends with a digit).
+        saved_author = saved.get("author", "")
+        if saved_author and re.search(r'\d$', saved_author.strip()):
+            saved_author = ""  # looks like "Series Name 1", not a real author name
+        nzb_author = nzb_author_from_name or saved_author
 
         if not abs_url or not abs_token:
             log_to_db("INFO", "auto", f"Download #{download_id} complete — ABS not configured, skipping auto-match", download_id=download_id)
