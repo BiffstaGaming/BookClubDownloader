@@ -16,6 +16,7 @@ from app.scrapers.nzbking import NzbkingScraper
 from app.services.nzbget import NzbgetClient
 from app.routers.settings import get_setting
 from app.log_handler import log_to_db
+from app.services.abs import AbsClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -98,7 +99,9 @@ def _write_abs_metadata(m4b_path: str, title: str, author: str, series: str, ser
     if author:
         meta["author"] = author
     if series:
-        meta["series"] = [{"name": series, "sequence": series_part or ""}]
+        meta["series"] = series
+        if series_part:
+            meta["volumeNumber"] = series_part
 
     dest_dir = os.path.dirname(m4b_path)
     meta_path = os.path.join(dest_dir, "metadata.abs")
@@ -115,6 +118,44 @@ def _map_path(path: str, nzbget_prefix: str, local_prefix: str) -> str:
         # regardless of whether the saved prefixes have trailing/leading slashes.
         return local_prefix.rstrip("/") + "/" + remainder.lstrip("/")
     return path
+
+
+async def _abs_scan_and_match(download_id: int, title: str, author: str, abs_url: str, abs_token: str, abs_library_id: str):
+    """After conversion, scan ABS library and trigger Quick Match on the new item."""
+    if not abs_url or not abs_token or not abs_library_id:
+        return
+
+    client = AbsClient(abs_url, abs_token)
+
+    # Trigger a library scan so ABS picks up the new file
+    try:
+        client.scan_library(abs_library_id)
+        log_to_db("INFO", "abs", "ABS library scan triggered", download_id=download_id)
+    except Exception as exc:
+        log_to_db("WARNING", "abs", f"ABS scan trigger failed: {exc}", download_id=download_id)
+
+    # Poll until the item appears in search (up to ~3 minutes)
+    item_id = None
+    for attempt in range(18):  # 18 × 10s = 3 min
+        await asyncio.sleep(10)
+        try:
+            results = client.search_library(abs_library_id, title)
+            if results:
+                item_id = results[0]["id"]
+                log_to_db("INFO", "abs", f"Book found in ABS (item {item_id}) after {(attempt + 1) * 10}s", download_id=download_id)
+                break
+        except Exception as exc:
+            log_to_db("DEBUG", "abs", f"ABS search attempt {attempt + 1} failed: {exc}", download_id=download_id)
+
+    if not item_id:
+        log_to_db("WARNING", "abs", "Book not found in ABS after 3 minutes — Quick Match skipped", download_id=download_id)
+        return
+
+    try:
+        client.quick_match(item_id, title, author)
+        log_to_db("INFO", "abs", f"Quick Match complete for ABS item {item_id}", download_id=download_id)
+    except Exception as exc:
+        log_to_db("ERROR", "abs", f"Quick Match failed for item {item_id}: {exc}", download_id=download_id)
 
 
 async def _run_m4b_conversion(
@@ -221,6 +262,14 @@ async def _run_m4b_conversion(
                         shutil.move(output_file, dest)
                         final_path = dest
                         logger.info("Moved M4B to %s", dest)
+                        # Clean up the input folder now that the m4b is safely moved
+                        if (os.path.isdir(input_path) and
+                                os.path.abspath(input_path) != os.path.abspath(os.path.dirname(dest))):
+                            try:
+                                shutil.rmtree(input_path)
+                                log_to_db("INFO", "conversion", f"Deleted input folder: {input_path}", download_id=download_id)
+                            except Exception as rm_exc:
+                                log_to_db("WARNING", "conversion", f"Could not delete input folder {input_path}: {rm_exc}", download_id=download_id)
                     except Exception as move_exc:
                         logger.warning("Could not move M4B to %s: %s", dest, move_exc)
                         log += f"\n[Move failed: {move_exc}]"
@@ -241,6 +290,12 @@ async def _run_m4b_conversion(
                 except Exception as meta_exc:
                     logger.warning("Could not write metadata.abs: %s", meta_exc)
                     log_to_db("WARNING", "conversion", f"metadata.abs write failed: {meta_exc}", download_id=download_id)
+
+                # Trigger ABS library scan + Quick Match (if configured)
+                abs_url = get_setting(db, "abs_url")
+                abs_token = get_setting(db, "abs_token")
+                abs_library_id = get_setting(db, "abs_library_id")
+                await _abs_scan_and_match(download_id, title, author, abs_url, abs_token, abs_library_id)
             else:
                 dl.m4b_status = "m4b_failed"
                 if _no_files:
@@ -433,18 +488,25 @@ async def get_convert_form(
     if dl.status != "downloaded":
         return HTMLResponse('<div class="alert alert-warning">Download must be completed before converting.</div>')
 
+    # Pre-fill from previously saved metadata if available
+    saved = {}
+    if dl.download_metadata:
+        try:
+            saved = json.loads(dl.download_metadata)
+        except Exception:
+            pass
+
     m4b_output_path = get_setting(db, "m4b_output_path")
     safe_title = _sanitize_filename(dl.post_title or dl.nzb_name or "output")
-
-    # Suggest output filename
-    suggested_output = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
+    default_output = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
 
     return templates.TemplateResponse(
         "partials/convert_form.html",
         {
             "request": request,
             "dl": dl,
-            "suggested_output": suggested_output,
+            "saved": saved,
+            "suggested_output": saved.get("output_file") or default_output,
         },
     )
 
@@ -470,7 +532,17 @@ async def start_convert(
     if not output_file:
         return HTMLResponse('<div class="alert alert-warning">Output file path is required.</div>')
 
+    # Persist the conversion metadata so retries don't need re-entry
+    dl.download_metadata = json.dumps({
+        "title": title,
+        "author": author,
+        "series": series,
+        "series_part": series_part,
+        "input_path": input_path,
+        "output_file": output_file,
+    }, ensure_ascii=False)
     dl.m4b_status = "converting"
+    dl.m4b_progress = None
     db.commit()
 
     background_tasks.add_task(

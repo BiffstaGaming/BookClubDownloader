@@ -32,6 +32,7 @@ def migrate_db():
     """Add any missing columns to existing tables (safe to run on every startup)."""
     new_columns = [
         ("downloads", "download_path", "TEXT"),
+        ("downloads", "download_metadata", "TEXT"),
         ("downloads", "m4b_status", "TEXT"),
         ("downloads", "m4b_progress", "INTEGER"),
         ("downloads", "m4b_path", "TEXT"),

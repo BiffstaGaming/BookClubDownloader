@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models import Setting
 from app.scrapers.abook import AbookScraper
 from app.services.nzbget import NzbgetClient
+from app.services.abs import AbsClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -27,6 +28,9 @@ SETTING_KEYS = [
     "m4b_move_template",
     "m4b_jobs",
     "m4b_bitrate",
+    "abs_url",
+    "abs_token",
+    "abs_library_id",
 ]
 
 
@@ -73,6 +77,9 @@ async def save_settings(
     m4b_move_template: str = Form(default=""),
     m4b_jobs: str = Form(default=""),
     m4b_bitrate: str = Form(default=""),
+    abs_url: str = Form(default=""),
+    abs_token: str = Form(default=""),
+    abs_library_id: str = Form(default=""),
 ):
     values = {
         "abook_url": abook_url,
@@ -88,6 +95,9 @@ async def save_settings(
         "m4b_move_template": m4b_move_template,
         "m4b_jobs": m4b_jobs,
         "m4b_bitrate": m4b_bitrate,
+        "abs_url": abs_url,
+        "abs_token": abs_token,
+        "abs_library_id": abs_library_id,
     }
     for key, value in values.items():
         set_setting(db, key, value)
@@ -184,6 +194,51 @@ async def test_abook(
             )
     except Exception as exc:
         logger.error("abook.link login test error: %s", exc)
+        return HTMLResponse(
+            f'<div class="alert alert-danger mb-0">'
+            f'<i class="bi bi-x-circle-fill me-2"></i>Error: {exc}</div>'
+        )
+
+
+@router.post("/abs-libraries", response_class=HTMLResponse)
+async def fetch_abs_libraries(
+    request: Request,
+    abs_url: str = Form(default=""),
+    abs_token: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    if not abs_url:
+        abs_url = get_setting(db, "abs_url")
+    if not abs_token:
+        abs_token = get_setting(db, "abs_token")
+
+    if not abs_url or not abs_token:
+        return HTMLResponse(
+            '<div class="alert alert-warning mb-0">ABS URL and API token are required.</div>'
+        )
+
+    try:
+        client = AbsClient(abs_url, abs_token)
+        libraries = client.get_libraries()
+        if not libraries:
+            return HTMLResponse(
+                '<div class="alert alert-warning mb-0">No libraries found.</div>'
+            )
+        current = get_setting(db, "abs_library_id")
+        options = "".join(
+            f'<option value="{lib["id"]}" {"selected" if lib["id"] == current else ""}>'
+            f'{lib["name"]}</option>'
+            for lib in libraries
+        )
+        return HTMLResponse(
+            f'<select class="form-select bc-input" id="abs_library_id" name="abs_library_id">'
+            f'{options}</select>'
+            f'<div class="form-text text-muted mt-1">'
+            f'<i class="bi bi-check-circle-fill text-success me-1"></i>'
+            f'Connected — select your audiobook library then save.</div>'
+        )
+    except Exception as exc:
+        logger.error("ABS library fetch error: %s", exc)
         return HTMLResponse(
             f'<div class="alert alert-danger mb-0">'
             f'<i class="bi bi-x-circle-fill me-2"></i>Error: {exc}</div>'

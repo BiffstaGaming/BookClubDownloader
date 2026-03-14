@@ -283,6 +283,76 @@
         </div>
       </div>
 
+      <!-- Audiobookshelf Section -->
+      <div class="bc-card mb-4">
+        <div class="bc-card-header d-flex align-items-center gap-2">
+          <i class="bi bi-collection-play-fill text-accent"></i>
+          <span>Audiobookshelf Integration</span>
+        </div>
+        <div class="bc-card-body">
+          <p class="text-muted small mb-3">
+            After conversion, BookClub will scan your ABS library and trigger a Quick Match
+            to automatically import cover art and any missing metadata.
+          </p>
+          <div class="mb-3">
+            <label for="abs_url" class="form-label bc-label">Audiobookshelf URL</label>
+            <input
+              type="url"
+              class="form-control bc-input"
+              id="abs_url"
+              name="abs_url"
+              value="{{ settings.get('abs_url', '') }}"
+              placeholder="http://audiobookshelf:13378"
+            />
+          </div>
+          <div class="mb-3">
+            <label for="abs_token" class="form-label bc-label">API Token</label>
+            <input
+              type="password"
+              class="form-control bc-input"
+              id="abs_token"
+              name="abs_token"
+              value="{{ settings.get('abs_token', '') }}"
+              placeholder="Your ABS API token"
+              autocomplete="off"
+            />
+            <div class="form-text text-muted">
+              Found in Audiobookshelf under <strong>Settings → Users → [your user] → API Token</strong>.
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label bc-label">Library</label>
+            <div id="abs-library-wrap">
+              {% if settings.get('abs_library_id') %}
+              <select class="form-select bc-input" id="abs_library_id" name="abs_library_id">
+                <option value="{{ settings.get('abs_library_id') }}" selected>
+                  {{ settings.get('abs_library_id') }} (saved — click Fetch to refresh)
+                </option>
+              </select>
+              {% else %}
+              <div class="text-muted small fst-italic">Click "Fetch Libraries" after entering URL and token.</div>
+              <input type="hidden" id="abs_library_id" name="abs_library_id" value="" />
+              {% endif %}
+            </div>
+            <div id="abs-library-result" class="mt-2"></div>
+          </div>
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              class="btn bc-btn-outline"
+              hx-post="/settings/abs-libraries"
+              hx-target="#abs-library-wrap"
+              hx-swap="innerHTML"
+              hx-indicator=".abs-spinner"
+              hx-include="[name='abs_url'],[name='abs_token']"
+            >
+              <span class="spinner-border spinner-border-sm abs-spinner htmx-indicator me-1" role="status"></span>
+              <i class="bi bi-arrow-repeat me-1"></i>Fetch Libraries
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Save button -->
       <div class="d-flex justify-content-end">
         <button type="submit" class="btn bc-btn-primary px-5">
