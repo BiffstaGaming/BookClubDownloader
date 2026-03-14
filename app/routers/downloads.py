@@ -116,18 +116,36 @@ def _write_abs_metadata(m4b_path: str, title: str, author: str, series: str, ser
 AUTO_MATCH_THRESHOLD = 90  # confidence % required for automatic conversion
 
 
-def _extract_nzb_title(name: str) -> str:
+def _parse_nzb_name(name: str) -> tuple[str, str]:
     """
-    Extract the book title from the forum NZB naming convention:
-      "Book Club - Author - Series## - BookTitle (Year)"
-      "Book Club - Author - Series## - BookTitle (Narrator Name)"
-    Strips any trailing parenthetical (year OR narrator), splits on ' - ',
-    returns the last segment.
+    Parse the forum NZB naming convention:
+      "Book Club - [FLAG] Author - Series## - BookTitle (Narrator/Year)"
+    Returns (title, author).
+    Strips any trailing parenthetical (year OR narrator name).
+    Strips bracketed flags like [SPOT] from the author segment.
     """
     # Strip any trailing (...) — covers both "(2025)" and "(Colin Mace)"
     name = re.sub(r'\s*\([^)]+\)\s*$', '', name).strip()
     parts = [p.strip() for p in name.split(' - ')]
-    return parts[-1] if len(parts) >= 2 else name
+    # Need at least "Book Club - Author - Title"
+    if len(parts) >= 3:
+        title  = parts[-1]
+        author = re.sub(r'^\[[^\]]+\]\s*', '', parts[1]).strip()  # strip [SPOT] etc.
+    elif len(parts) == 2:
+        title  = parts[-1]
+        author = ""
+    else:
+        title  = name
+        author = ""
+    return title, author
+
+
+def _extract_nzb_title(name: str) -> str:
+    return _parse_nzb_name(name)[0]
+
+
+def _extract_nzb_author(name: str) -> str:
+    return _parse_nzb_name(name)[1]
 
 
 def _extract_audible_series(book: dict) -> tuple[str, str]:
@@ -222,15 +240,21 @@ async def _auto_process_download(download_id: int):
         abs_token  = get_setting(db, "abs_token")
         m4b_output = get_setting(db, "m4b_output_path")
 
-        nzb_title  = _extract_nzb_title(dl.post_title or dl.nzb_name or "")
-        nzb_author = saved.get("author", "")
+        nzb_name   = dl.post_title or dl.nzb_name or ""
+        nzb_title  = _extract_nzb_title(nzb_name)
+        # Use forum-saved author if available, otherwise extract from NZB name
+        nzb_author = saved.get("author") or _extract_nzb_author(nzb_name)
 
         if not abs_url or not abs_token:
             log_to_db("INFO", "auto", f"Download #{download_id} complete — ABS not configured, skipping auto-match", download_id=download_id)
             return
         if not nzb_title:
-            log_to_db("WARNING", "auto", f"Download #{download_id}: could not extract title from '{dl.post_title}'", download_id=download_id)
+            log_to_db("WARNING", "auto", f"Download #{download_id}: could not extract title from '{nzb_name}'", download_id=download_id)
             return
+
+        log_to_db("INFO", "auto",
+            f"Download #{download_id}: searching Audible — title='{nzb_title}' author='{nzb_author}' (from: '{nzb_name}')",
+            download_id=download_id)
 
         try:
             client  = AbsClient(abs_url, abs_token)
@@ -240,8 +264,13 @@ async def _auto_process_download(download_id: int):
                 saved["match_confidence"] = 0
                 dl.download_metadata = json.dumps(saved, ensure_ascii=False)
                 db.commit()
-                log_to_db("WARNING", "auto", f"Download #{download_id}: no Audible results for '{nzb_title}'", download_id=download_id)
+                log_to_db("WARNING", "auto", f"Download #{download_id}: no Audible results for title='{nzb_title}' author='{nzb_author}'", download_id=download_id)
                 return
+
+            candidate_titles = [r.get("title", "") for r in results[:5]]
+            log_to_db("DEBUG", "auto",
+                f"Download #{download_id}: top {len(candidate_titles)} Audible candidates: {candidate_titles}",
+                download_id=download_id)
 
             book           = _best_audible_match(results, nzb_title)
             audible_title  = book.get("title", "")
@@ -250,7 +279,7 @@ async def _auto_process_download(download_id: int):
             confidence     = _compute_confidence(nzb_title, nzb_author, audible_title, audible_author)
 
             log_to_db("INFO", "auto",
-                f"Download #{download_id}: '{nzb_title}' → '{audible_title}' by '{audible_author}' — confidence {confidence}%",
+                f"Download #{download_id}: best match '{audible_title}' by '{audible_author}' — confidence {confidence}%",
                 download_id=download_id)
 
             saved["title"]            = audible_title       or saved.get("title", "")
@@ -810,13 +839,21 @@ async def metadata_lookup(
 
     lookup_error = None
     if abs_url and abs_token:
-        nzb_title    = _extract_nzb_title(dl.post_title or dl.nzb_name or "")
+        nzb_name     = dl.post_title or dl.nzb_name or ""
+        nzb_title    = _extract_nzb_title(nzb_name)
         query_title  = nzb_title or saved.get("title") or ""
-        query_author = saved.get("author") or ""
+        query_author = saved.get("author") or _extract_nzb_author(nzb_name)
         try:
+            log_to_db("INFO", "metadata",
+                f"Manual Audible fetch #{download_id}: searching title='{query_title}' author='{query_author}'",
+                download_id=download_id)
             client  = AbsClient(abs_url, abs_token)
             results = client.search_books(query_title.strip(), author=query_author.strip())
             if results:
+                candidate_titles = [r.get("title", "") for r in results[:5]]
+                log_to_db("DEBUG", "metadata",
+                    f"Manual Audible fetch #{download_id}: candidates {candidate_titles}",
+                    download_id=download_id)
                 book           = _best_audible_match(results, nzb_title)
                 audible_title  = book.get("title", "")
                 audible_author = book.get("author") or book.get("authors") or ""
@@ -825,7 +862,7 @@ async def metadata_lookup(
 
                 log_to_db("DEBUG", "metadata", f"Audible raw result: {json.dumps(book, ensure_ascii=False)}", download_id=download_id)
                 log_to_db("INFO", "metadata",
-                    f"Manual Audible fetch #{download_id}: '{nzb_title}' → '{audible_title}' — confidence {confidence}%",
+                    f"Manual Audible fetch #{download_id}: selected '{audible_title}' by '{audible_author}' — confidence {confidence}%",
                     download_id=download_id)
 
                 # Explicit fetch — always replace with Audible data; fall back to saved if Audible has nothing
