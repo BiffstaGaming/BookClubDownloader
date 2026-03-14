@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -83,6 +84,27 @@ def _find_audio_dirs(base_path: str) -> list[str]:
         if any(os.path.splitext(f)[1].lower() in _AUDIO_EXTS for f in files):
             found.append(root)
     return found or [base_path]
+
+
+def _write_abs_metadata(m4b_path: str, title: str, author: str, series: str, series_part: str) -> str:
+    """
+    Write a metadata.abs file into the same directory as the m4b file.
+    Audiobookshelf reads this on scan and it takes full priority over embedded tags.
+    Returns the path to the written file.
+    """
+    meta = {}
+    if title:
+        meta["title"] = title
+    if author:
+        meta["author"] = author
+    if series:
+        meta["series"] = [{"name": series, "sequence": series_part or ""}]
+
+    dest_dir = os.path.dirname(m4b_path)
+    meta_path = os.path.join(dest_dir, "metadata.abs")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2, ensure_ascii=False)
+    return meta_path
 
 
 def _map_path(path: str, nzbget_prefix: str, local_prefix: str) -> str:
@@ -212,6 +234,13 @@ async def _run_m4b_conversion(
                 dl.m4b_path = final_path
                 logger.info("M4B conversion complete for download #%d: %s", download_id, final_path)
                 log_to_db("INFO", "conversion", f"M4B ready at: {final_path}", download_id=download_id)
+                # Write metadata.abs for Audiobookshelf
+                try:
+                    meta_path = _write_abs_metadata(final_path, title, author, series, series_part)
+                    log_to_db("INFO", "conversion", f"metadata.abs written at: {meta_path}", download_id=download_id)
+                except Exception as meta_exc:
+                    logger.warning("Could not write metadata.abs: %s", meta_exc)
+                    log_to_db("WARNING", "conversion", f"metadata.abs write failed: {meta_exc}", download_id=download_id)
             else:
                 dl.m4b_status = "m4b_failed"
                 if _no_files:
