@@ -1,11 +1,10 @@
-import re
 import logging
 import requests
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-BINSEARCH_BASE = "https://binsearch.info"
+BINSEARCH_BASE = "https://www.binsearch.info"
 
 
 class BinsearchScraper:
@@ -21,23 +20,26 @@ class BinsearchScraper:
 
     def search(self, query: str) -> list[dict]:
         """
-        Search binsearch.net and return a list of NZB result dicts.
+        Search www.binsearch.info and return a list of NZB result dicts.
 
-        Page structure (table-based):
-          <table id="r2">
-            <tr class="even">
-              <td><input type="checkbox" name="MSGID" value="1" /></td>
-              <td class="subject"><span id="sN">Title <b>"file.rar"</b> <span class="d">poster</span></span></td>
-              <td>01-Jan-2024</td>
-              <td class="right">252.0 MB</td>
-              <td>group</td>
+        Page structure:
+          <table class="... result-table">
+            <tr>
+              <td>N.</td>
+              <td><input type="checkbox" class="mx-2" name="[base64-id]"/></td>
+              <td>
+                <a class="... font-medium ..." href="/details/[id]">Title</a>
+                <a href="/search?poster=...">Poster</a>
+              </td>
+              <td class="min-w-20">9 days</td>
             </tr>
           </table>
+        NZB download: GET /nzb?[base64-id]=1
         """
         try:
             response = self.session.get(
-                BINSEARCH_BASE + "/",
-                params={"q": query, "max": "100", "adv_age": "", "server": ""},
+                BINSEARCH_BASE + "/search",
+                params={"q": query},
                 timeout=30,
                 allow_redirects=True,
             )
@@ -46,13 +48,13 @@ class BinsearchScraper:
 
             results = []
 
-            table = soup.find("table", id="r2")
+            table = soup.find("table", class_="result-table")
             if not table:
                 logger.info("BinsearchScraper.search: no results table found for query %r", query)
                 return results
 
-            for row in table.find_all("tr", class_=["even", "odd"]):
-                # Message ID from checkbox name
+            for row in table.find_all("tr"):
+                # Checkbox holds the base64 NZB identifier as its name attribute
                 checkbox = row.find("input", attrs={"type": "checkbox"})
                 if not checkbox:
                     continue
@@ -60,38 +62,28 @@ class BinsearchScraper:
                 if not nzb_hash:
                     continue
 
-                cells = row.find_all("td")
-                if len(cells) < 3:
-                    continue
-
-                # Title: text from subject cell, stripping poster and filename spans
+                # Title: the <a> with font-medium class (the subject link)
                 title = ""
-                subject_cell = row.find("td", class_="subject") or (cells[1] if len(cells) > 1 else None)
-                if subject_cell:
-                    # Remove the poster <span class="d"> so it doesn't pollute the title
-                    for d_span in subject_cell.find_all("span", class_="d"):
-                        d_span.decompose()
-                    raw = subject_cell.get_text(separator=" ", strip=True)
-                    # Strip quoted filenames like "file.part01.rar"
-                    raw = re.sub(r'"[^"]*"', "", raw).strip()
-                    title = raw or nzb_hash
+                detail_url = ""
+                title_link = row.find("a", class_=lambda c: c and "font-medium" in c)
+                if title_link:
+                    title = title_link.get_text(separator=" ", strip=True)
+                    href = title_link.get("href", "")
+                    if href:
+                        detail_url = BINSEARCH_BASE + href
 
-                # Date — typically the 3rd cell (index 2)
+                # Age: <td class="min-w-20">
                 age = ""
-                if len(cells) > 2:
-                    age = cells[2].get_text(strip=True)
-
-                # Size — typically the 4th cell (index 3)
-                size = ""
-                if len(cells) > 3:
-                    size = cells[3].get_text(strip=True)
+                age_cell = row.find("td", class_=lambda c: c and "min-w-20" in c)
+                if age_cell:
+                    age = age_cell.get_text(strip=True)
 
                 results.append({
                     "nzb_hash": nzb_hash,
-                    "title": title,
-                    "size": size,
+                    "title": title or nzb_hash,
+                    "size": "",
                     "age": age,
-                    "detail_url": "",
+                    "detail_url": detail_url,
                     "source": "binsearch",
                 })
 
@@ -102,11 +94,11 @@ class BinsearchScraper:
             raise
 
     def download_nzb(self, nzb_hash: str) -> bytes:
-        """Download an NZB file by POSTing the message ID to binsearch."""
+        """Download an NZB file via GET /nzb?{nzb_hash}=1."""
         try:
-            response = self.session.post(
-                BINSEARCH_BASE + "/",
-                data={"action": "nzb", nzb_hash: "1"},
+            response = self.session.get(
+                BINSEARCH_BASE + "/nzb",
+                params={nzb_hash: "1"},
                 timeout=60,
                 allow_redirects=True,
             )
