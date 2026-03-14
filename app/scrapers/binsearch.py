@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-BINSEARCH_BASE = "https://binsearch.net"
+BINSEARCH_BASE = "https://binsearch.info"
 
 
 class BinsearchScraper:
