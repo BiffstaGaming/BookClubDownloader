@@ -17,26 +17,38 @@
         <!-- Level filter -->
         <div class="d-flex align-items-center gap-2 flex-wrap">
           <span class="text-muted small me-1">Level:</span>
-          {% for lvl in [("ALL","bc-btn-outline"),("DEBUG","bc-badge-muted"),("INFO",""),("WARNING",""),("ERROR","")] %}
+          {% for lvl in ["ALL","DEBUG","INFO","WARNING","ERROR"] %}
           <button
-            class="btn btn-sm level-filter-btn {% if lvl[0] == 'ALL' %}active-filter{% endif %}"
-            data-level="{{ lvl[0] }}"
-            onclick="setLevelFilter('{{ lvl[0] }}')"
-          >{{ lvl[0] }}</button>
+            class="btn btn-sm level-filter-btn {% if lvl == 'ALL' %}active-filter{% endif %}"
+            data-level="{{ lvl }}"
+            onclick="setLevelFilter('{{ lvl }}')"
+          >{{ lvl }}</button>
           {% endfor %}
         </div>
 
-        <!-- Clear button -->
-        <button
-          class="btn btn-sm"
-          style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
-          hx-delete="/logs"
-          hx-target="#log-rows-wrap"
-          hx-swap="innerHTML"
-          hx-confirm="Clear all log entries?"
-        >
-          <i class="bi bi-trash3 me-1"></i>Clear All
-        </button>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <!-- Limit selector -->
+          <span class="text-muted small">Max rows:</span>
+          <select id="log-limit" class="form-select form-select-sm" style="width:auto;" onchange="setLogLimit(this.value)">
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="250">250</option>
+            <option value="500">500</option>
+            <option value="0">All</option>
+          </select>
+
+          <!-- Clear button -->
+          <button
+            class="btn btn-sm"
+            style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
+            hx-delete="/logs"
+            hx-target="#log-rows-wrap"
+            hx-swap="innerHTML"
+            hx-confirm="Clear all log entries?"
+          >
+            <i class="bi bi-trash3 me-1"></i>Clear All
+          </button>
+        </div>
       </div>
 
       <div class="bc-card-body p-0">
@@ -53,7 +65,7 @@
             </thead>
             <tbody
               id="log-rows-wrap"
-              hx-get="/logs/entries?level=ALL"
+              hx-get="/logs/entries?level=ALL&limit=50"
               hx-trigger="load, every 15s"
               hx-swap="innerHTML"
             ></tbody>
@@ -82,15 +94,25 @@
 .level-filter-btn.active-filter { background: var(--accent); border-color: var(--accent); color: #fff; }
 </style>
 <script>
+function _logUrl() {
+  var level = (document.querySelector('.level-filter-btn.active-filter') || {dataset:{level:'ALL'}}).dataset.level;
+  var limit = document.getElementById('log-limit').value;
+  return '/logs/entries?level=' + level + '&limit=' + limit;
+}
 function setLevelFilter(level) {
-  // Update button states
   document.querySelectorAll('.level-filter-btn').forEach(function(btn) {
     btn.classList.toggle('active-filter', btn.dataset.level === level);
   });
-  // Trigger HTMX fetch with the new level param
+  var url = _logUrl();
   var tbody = document.getElementById('log-rows-wrap');
-  tbody.setAttribute('hx-get', '/logs/entries?level=' + level);
-  htmx.trigger(tbody, 'load');
+  tbody.setAttribute('hx-get', url);
+  htmx.ajax('GET', url, { target: '#log-rows-wrap', swap: 'innerHTML' });
+}
+function setLogLimit(limit) {
+  var url = _logUrl();
+  var tbody = document.getElementById('log-rows-wrap');
+  tbody.setAttribute('hx-get', url);
+  htmx.ajax('GET', url, { target: '#log-rows-wrap', swap: 'innerHTML' });
 }
 </script>
 {% endblock %}

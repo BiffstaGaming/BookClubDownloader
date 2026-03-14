@@ -8,6 +8,7 @@ import unicodedata
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import and_, not_
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
@@ -497,8 +498,23 @@ async def downloads_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
+def _apply_dl_filter(q, dl_filter: str):
+    """Apply status filter to a Download query."""
+    if dl_filter == "active":
+        # Show anything that isn't done (downloaded+converted) or failed
+        q = q.filter(
+            not_(and_(Download.status == "downloaded", Download.m4b_status == "converted"))
+        ).filter(Download.status != "failed")
+    return q
+
+
 @router.post("/sync-status", response_class=HTMLResponse)
-async def sync_status(request: Request, db: Session = Depends(get_db)):
+async def sync_status(
+    request: Request,
+    dl_filter: str = Form(default="active"),
+    dl_limit: int = Form(default=5),
+    db: Session = Depends(get_db),
+):
     """
     Check nzbget history for any downloads still in 'sent' status and update them.
     Called by HTMX polling on the downloads page.
@@ -513,9 +529,15 @@ async def sync_status(request: Request, db: Session = Depends(get_db)):
         Download.status == "sent", Download.nzbget_id.isnot(None)
     ).all()
 
+    def _fetch_downloads():
+        q = db.query(Download).order_by(Download.created_at.desc())
+        q = _apply_dl_filter(q, dl_filter)
+        if dl_limit > 0:
+            q = q.limit(dl_limit)
+        return q.all()
+
     if not pending or not nzbget_url:
-        # Nothing to check — return current table rows silently
-        downloads = db.query(Download).order_by(Download.created_at.desc()).all()
+        downloads = _fetch_downloads()
         return templates.TemplateResponse(
             "partials/download_rows.html",
             {"request": request, "downloads": downloads},
@@ -557,7 +579,7 @@ async def sync_status(request: Request, db: Session = Depends(get_db)):
     except Exception as exc:
         logger.warning("sync_status: could not reach nzbget: %s", exc)
 
-    downloads = db.query(Download).order_by(Download.created_at.desc()).all()
+    downloads = _fetch_downloads()
     return templates.TemplateResponse(
         "partials/download_rows.html",
         {"request": request, "downloads": downloads},

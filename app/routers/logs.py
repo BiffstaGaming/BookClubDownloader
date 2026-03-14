@@ -12,7 +12,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
-PAGE_SIZE = 500
+DEFAULT_LOG_LIMIT = 50
 
 
 @router.get("", response_class=HTMLResponse)
@@ -24,12 +24,14 @@ async def logs_page(request: Request, db: Session = Depends(get_db)):
 async def log_entries(
     request: Request,
     level: str = Query(default="ALL"),
+    limit: int = Query(default=DEFAULT_LOG_LIMIT),
     db: Session = Depends(get_db),
 ):
     q = db.query(LogEntry)
     if level.upper() in VALID_LEVELS:
         q = q.filter(LogEntry.level == level.upper())
-    entries = q.order_by(LogEntry.created_at.desc()).limit(PAGE_SIZE).all()
+    effective_limit = max(1, limit) if limit > 0 else 500
+    entries = q.order_by(LogEntry.created_at.desc()).limit(effective_limit).all()
     return templates.TemplateResponse(
         "partials/log_rows.html",
         {"request": request, "entries": entries, "level": level},

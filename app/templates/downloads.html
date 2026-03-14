@@ -12,10 +12,32 @@
 
   <div class="col-12">
     <div class="bc-card">
-      <div class="bc-card-header d-flex align-items-center justify-content-between">
-        <span>Sent Downloads</span>
-        <span class="badge bc-badge-muted">{{ downloads | length }} total</span>
+      <div class="bc-card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <!-- Filter buttons -->
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <span class="text-muted small me-1">Show:</span>
+          <button class="btn btn-sm dl-filter-btn active-filter" data-filter="active" onclick="setDlFilter('active')">Active</button>
+          <button class="btn btn-sm dl-filter-btn" data-filter="all" onclick="setDlFilter('all')">All</button>
+        </div>
+        <!-- Limit selector -->
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-muted small">Max rows:</span>
+          <select id="dl-limit-select" class="form-select form-select-sm" style="width:auto;" onchange="setDlLimit(this.value)">
+            <option value="5" selected>5</option>
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="0">All</option>
+          </select>
+        </div>
       </div>
+
+      <!-- Hidden control inputs included with every HTMX poll -->
+      <form id="dl-controls" style="display:none;">
+        <input type="hidden" id="dl-filter-input" name="dl_filter" value="active" />
+        <input type="hidden" id="dl-limit-input" name="dl_limit" value="5" />
+      </form>
+
       <div class="bc-card-body p-0">
         <div class="table-responsive">
           <table class="table bc-table mb-0">
@@ -32,6 +54,7 @@
             <tbody
               id="download-rows"
               hx-post="/downloads/sync-status"
+              hx-include="#dl-controls"
               hx-trigger="load, every 10s, refreshDownloads from:body"
               hx-swap="innerHTML"
             >
@@ -52,4 +75,43 @@
   <!-- Convert to M4B panel — populated by HTMX when Convert button is clicked -->
   <div class="col-12" id="convert-panel"></div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<style>
+.dl-filter-btn {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 5px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  transition: background 0.15s, color 0.15s;
+}
+.dl-filter-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+.dl-filter-btn.active-filter { background: var(--accent); border-color: var(--accent); color: #fff; }
+</style>
+<script>
+function setDlFilter(f) {
+  document.getElementById('dl-filter-input').value = f;
+  document.querySelectorAll('.dl-filter-btn').forEach(function(btn) {
+    btn.classList.toggle('active-filter', btn.dataset.filter === f);
+  });
+  htmx.ajax('POST', '/downloads/sync-status', {
+    target: '#download-rows',
+    swap: 'innerHTML',
+    values: { dl_filter: f, dl_limit: document.getElementById('dl-limit-input').value }
+  });
+}
+function setDlLimit(l) {
+  document.getElementById('dl-limit-input').value = l;
+  htmx.ajax('POST', '/downloads/sync-status', {
+    target: '#download-rows',
+    swap: 'innerHTML',
+    values: { dl_filter: document.getElementById('dl-filter-input').value, dl_limit: l }
+  });
+}
+</script>
 {% endblock %}
