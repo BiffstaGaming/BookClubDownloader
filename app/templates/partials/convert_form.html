@@ -24,7 +24,24 @@
         <span class="spinner-border spinner-border-sm audible-spinner htmx-indicator me-1" role="status"></span>
         <i class="bi bi-search me-1"></i>Fetch from Audible
       </button>
+      {% set conf = saved.get('match_confidence') %}
+      {% if conf is not none %}
+        {% if conf >= 90 %}
+        <span class="badge" style="background:rgba(46,160,67,0.2);color:#3fb950;border:1px solid rgba(46,160,67,0.3);">
+          <i class="bi bi-patch-check-fill me-1"></i>{{ conf }}% match
+        </span>
+        {% elif conf >= 70 %}
+        <span class="badge" style="background:rgba(210,153,34,0.2);color:#e3b341;border:1px solid rgba(210,153,34,0.3);">
+          <i class="bi bi-patch-question-fill me-1"></i>{{ conf }}% — review recommended
+        </span>
+        {% else %}
+        <span class="badge" style="background:rgba(240,71,71,0.2);color:#f04747;border:1px solid rgba(240,71,71,0.3);">
+          <i class="bi bi-patch-exclamation-fill me-1"></i>{{ conf }}% — low confidence
+        </span>
+        {% endif %}
+      {% else %}
       <span class="text-muted small">Auto-fill title, author and series from Audible metadata.</span>
+      {% endif %}
       {% if lookup_error %}
       <span class="text-warning small"><i class="bi bi-exclamation-triangle me-1"></i>{{ lookup_error }}</span>
       {% endif %}

@@ -174,6 +174,9 @@ async def search_nzb(
         )
 
     term = search_term.strip()
+    # NZBKing matches on the exact subject string — spaces break the query.
+    # e.g. "abook.ws - m4hbvUxC5miiCBvE5Lw4" → "abook.ws-m4hbvUxC5miiCBvE5Lw4"
+    nzbking_term = term.replace(" ", "")
 
     try:
         if nzb_source == "binsearch":
@@ -181,7 +184,7 @@ async def search_nzb(
             for r in results:
                 r.setdefault("source", "binsearch")
         else:
-            results = await asyncio.to_thread(NzbkingScraper().search, term)
+            results = await asyncio.to_thread(NzbkingScraper().search, nzbking_term)
             for r in results:
                 r["source"] = "nzbking"
     except Exception as exc:

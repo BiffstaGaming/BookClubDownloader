@@ -293,6 +293,9 @@ class AbookScraper:
           Series Name:     The Hunter Files
           Series Position: 06
         """
+        raw_debug = unhiddenbox.get_text(separator="\n")
+        logger.debug("_parse_unhiddenbox raw text:\n%s", raw_debug)
+
         codes = unhiddenbox.find_all("code", class_="bbc_code")
         search_term = codes[0].get_text(strip=True) if len(codes) > 0 else ""
         password = codes[1].get_text(strip=True) if len(codes) > 1 else ""

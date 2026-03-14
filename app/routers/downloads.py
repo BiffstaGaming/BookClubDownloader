@@ -1,4 +1,5 @@
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -110,6 +111,168 @@ def _write_abs_metadata(m4b_path: str, title: str, author: str, series: str, ser
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
     return meta_path
+
+
+AUTO_MATCH_THRESHOLD = 90  # confidence % required for automatic conversion
+
+
+def _extract_nzb_title(name: str) -> str:
+    """
+    Extract the book title from the forum NZB naming convention:
+      "Book Club - Author - Series## - BookTitle (Year)"
+    Strips the year, splits on ' - ', returns the last segment.
+    """
+    name = re.sub(r'\s*\(\d{4}\)\s*$', '', name).strip()
+    parts = [p.strip() for p in name.split(' - ')]
+    return parts[-1] if len(parts) >= 2 else name
+
+
+def _extract_audible_series(book: dict) -> tuple[str, str]:
+    """Return (series_name, series_part) from an ABS/Audible search result dict."""
+    series_raw = book.get("series")
+    if isinstance(series_raw, list) and series_raw:
+        s = series_raw[0]
+        name = s.get("name") or s.get("series") or ""
+        part = str(s.get("position") or s.get("volumeNumber") or s.get("sequence") or "")
+    elif isinstance(series_raw, str):
+        name = series_raw
+        part = ""
+        for k in ("volumeNumber", "sequence", "position", "seriesSequence"):
+            v = book.get(k)
+            if v:
+                part = str(v)
+                break
+    else:
+        name = ""
+        part = ""
+    return name, part
+
+
+def _compute_confidence(nzb_title: str, nzb_author: str, audible_title: str, audible_author: str) -> int:
+    """
+    Return 0-100 match confidence. Title weighted 65%, author 35%.
+    If no author to compare, title alone determines the score.
+    """
+    def _norm(s: str) -> str:
+        return re.sub(r'[^\w\s]', '', (s or "").lower()).strip()
+
+    def _ratio(a: str, b: str) -> float:
+        a, b = _norm(a), _norm(b)
+        if not a or not b:
+            return 0.0
+        return difflib.SequenceMatcher(None, a, b).ratio()
+
+    title_score = _ratio(nzb_title, audible_title)
+    if nzb_author and audible_author:
+        author_score = _ratio(nzb_author, audible_author)
+        score = title_score * 0.65 + author_score * 0.35
+    else:
+        score = title_score
+    return round(score * 100)
+
+
+async def _auto_process_download(download_id: int):
+    """
+    Background task triggered when a download completes.
+    Fetches Audible metadata, computes confidence, and auto-converts if >= AUTO_MATCH_THRESHOLD.
+    """
+    db = SessionLocal()
+    try:
+        dl = db.query(Download).filter(Download.id == download_id).first()
+        if not dl or dl.status != "downloaded":
+            return
+
+        saved = {}
+        if dl.download_metadata:
+            try:
+                saved = json.loads(dl.download_metadata)
+            except Exception:
+                pass
+
+        # Skip if already processed (e.g. re-poll after manual fetch)
+        if "match_confidence" in saved:
+            return
+
+        abs_url    = get_setting(db, "abs_url")
+        abs_token  = get_setting(db, "abs_token")
+        m4b_output = get_setting(db, "m4b_output_path")
+
+        nzb_title  = _extract_nzb_title(dl.post_title or dl.nzb_name or "")
+        nzb_author = saved.get("author", "")
+
+        if not abs_url or not abs_token:
+            log_to_db("INFO", "auto", f"Download #{download_id} complete — ABS not configured, skipping auto-match", download_id=download_id)
+            return
+        if not nzb_title:
+            log_to_db("WARNING", "auto", f"Download #{download_id}: could not extract title from '{dl.post_title}'", download_id=download_id)
+            return
+
+        try:
+            client  = AbsClient(abs_url, abs_token)
+            results = await asyncio.to_thread(client.search_books, nzb_title.strip(), nzb_author.strip())
+
+            if not results:
+                saved["match_confidence"] = 0
+                dl.download_metadata = json.dumps(saved, ensure_ascii=False)
+                db.commit()
+                log_to_db("WARNING", "auto", f"Download #{download_id}: no Audible results for '{nzb_title}'", download_id=download_id)
+                return
+
+            book           = results[0]
+            audible_title  = book.get("title", "")
+            audible_author = book.get("author") or book.get("authors") or ""
+            audible_series, audible_series_part = _extract_audible_series(book)
+            confidence     = _compute_confidence(nzb_title, nzb_author, audible_title, audible_author)
+
+            log_to_db("INFO", "auto",
+                f"Download #{download_id}: '{nzb_title}' → '{audible_title}' by '{audible_author}' — confidence {confidence}%",
+                download_id=download_id)
+
+            saved["title"]            = audible_title       or saved.get("title", "")
+            saved["author"]           = audible_author      or saved.get("author", "")
+            saved["series"]           = audible_series      or saved.get("series", "")
+            saved["series_part"]      = audible_series_part or saved.get("series_part", "")
+            saved["match_confidence"] = confidence
+
+            if confidence >= AUTO_MATCH_THRESHOLD and dl.download_path:
+                safe_title  = _sanitize_filename(saved["title"] or nzb_title)
+                output_file = (
+                    os.path.join(m4b_output, f"{safe_title}.m4b").replace("\\", "/")
+                    if m4b_output else f"/m4b/{safe_title}.m4b"
+                )
+                saved["input_path"]  = dl.download_path
+                saved["output_file"] = output_file
+                dl.download_metadata = json.dumps(saved, ensure_ascii=False)
+                dl.m4b_status        = "converting"
+                dl.m4b_progress      = None
+                db.commit()
+                db.close()
+                db = None
+
+                log_to_db("INFO", "auto",
+                    f"Download #{download_id}: auto-converting — confidence {confidence}% ≥ {AUTO_MATCH_THRESHOLD}%",
+                    download_id=download_id)
+                await _run_m4b_conversion(
+                    download_id, dl.download_path, output_file,
+                    saved["title"], saved["author"],
+                    saved.get("series", ""), saved.get("series_part", ""),
+                )
+            else:
+                dl.download_metadata = json.dumps(saved, ensure_ascii=False)
+                db.commit()
+                if not dl.download_path:
+                    log_to_db("WARNING", "auto", f"Download #{download_id}: no download path — cannot auto-convert", download_id=download_id)
+                else:
+                    log_to_db("INFO", "auto",
+                        f"Download #{download_id}: confidence {confidence}% below {AUTO_MATCH_THRESHOLD}% — manual review needed",
+                        download_id=download_id)
+
+        except Exception as exc:
+            logger.error("_auto_process_download failed for #%d: %s", download_id, exc)
+            log_to_db("ERROR", "auto", f"Auto-match failed for #{download_id}: {exc}", download_id=download_id)
+    finally:
+        if db:
+            db.close()
 
 
 def _map_path(path: str, nzbget_prefix: str, local_prefix: str) -> str:
@@ -518,6 +681,7 @@ def _apply_dl_filter(q, dl_filter: str):
 @router.post("/sync-status", response_class=HTMLResponse)
 async def sync_status(
     request: Request,
+    background_tasks: BackgroundTasks,
     dl_filter: str = Form(default="active"),
     dl_limit: int = Form(default=5),
     db: Session = Depends(get_db),
@@ -559,6 +723,7 @@ async def sync_status(
         queue = client.get_queue()
         queue_by_id = {item.get("NZBID"): item for item in queue}
 
+        newly_completed = []
         for dl in pending:
             # Update download progress from active queue
             q_item = queue_by_id.get(dl.nzbget_id)
@@ -580,9 +745,12 @@ async def sync_status(
                     final_dir = item.get("FinalDir") or item.get("DestDir", "")
                     if final_dir:
                         dl.download_path = _map_path(final_dir, nzbget_prefix, local_prefix)
+                    newly_completed.append(dl.id)
                 elif "FAILURE" in raw_status or "DELETED" in raw_status:
                     dl.status = "failed"
         db.commit()
+        for dl_id in newly_completed:
+            background_tasks.add_task(_auto_process_download, dl_id)
     except Exception as exc:
         logger.warning("sync_status: could not reach nzbget: %s", exc)
 
@@ -617,55 +785,34 @@ async def metadata_lookup(
 
     lookup_error = None
     if abs_url and abs_token:
-        # Prefer human-readable title/author from forum metadata over the NZB search term
-        query_title  = saved.get("title")  or dl.post_title or dl.nzb_name or ""
+        nzb_title    = _extract_nzb_title(dl.post_title or dl.nzb_name or "")
+        query_title  = nzb_title or saved.get("title") or ""
         query_author = saved.get("author") or ""
         try:
-            client = AbsClient(abs_url, abs_token)
+            client  = AbsClient(abs_url, abs_token)
             results = client.search_books(query_title.strip(), author=query_author.strip())
             if results:
-                book = results[0]
-                log_to_db("DEBUG", "metadata", f"Audible raw result: {json.dumps(book, ensure_ascii=False)}", download_id=download_id)
-
-                # Extract series/position from Audible result.
-                # ABS/audnexus may use different key names depending on version:
-                #   series: string or [{name/series, volumeNumber/sequence/position}]
-                #   position: volumeNumber | sequence | position (at list item or top level)
-                audible_series = ""
-                audible_series_part = ""
-                series_raw = book.get("series")
-
-                def _pick(*keys):
-                    """Return the first non-empty value found among the given keys."""
-                    for k in keys:
-                        v = book.get(k)
-                        if v:
-                            return str(v)
-                    return ""
-
-                if isinstance(series_raw, list) and series_raw:
-                    s = series_raw[0]
-                    audible_series = s.get("name") or s.get("series") or ""
-                    audible_series_part = str(
-                        s.get("position") or s.get("volumeNumber") or s.get("sequence") or ""
-                    )
-                elif isinstance(series_raw, str):
-                    audible_series = series_raw
-                    audible_series_part = _pick("volumeNumber", "sequence", "position", "seriesSequence")
-
+                book           = results[0]
+                audible_title  = book.get("title", "")
                 audible_author = book.get("author") or book.get("authors") or ""
+                audible_series, audible_series_part = _extract_audible_series(book)
+                confidence     = _compute_confidence(nzb_title, query_author, audible_title, audible_author)
 
-                # Fill gaps only — forum data takes priority, Audible fills what's missing
-                if not saved.get("title"):
-                    saved["title"] = book.get("title", "")
-                if not saved.get("author"):
-                    saved["author"] = audible_author
-                if not saved.get("series"):
-                    saved["series"] = audible_series
-                if not saved.get("series_part"):
-                    saved["series_part"] = audible_series_part
+                log_to_db("DEBUG", "metadata", f"Audible raw result: {json.dumps(book, ensure_ascii=False)}", download_id=download_id)
+                log_to_db("INFO", "metadata",
+                    f"Manual Audible fetch #{download_id}: '{nzb_title}' → '{audible_title}' — confidence {confidence}%",
+                    download_id=download_id)
 
-                log_to_db("INFO", "metadata", f"Audible lookup for #{download_id}: {saved.get('title')} by {saved.get('author')} — series_part: {saved.get('series_part')}", download_id=download_id)
+                # Explicit fetch — always replace with Audible data; fall back to saved if Audible has nothing
+                saved["title"]            = audible_title       or saved.get("title", "")
+                saved["author"]           = audible_author      or saved.get("author", "")
+                saved["series"]           = audible_series      or saved.get("series", "")
+                saved["series_part"]      = audible_series_part or saved.get("series_part", "")
+                saved["match_confidence"] = confidence
+
+                # Persist so the badge shows on the downloads page
+                dl.download_metadata = json.dumps(saved, ensure_ascii=False)
+                db.commit()
             else:
                 lookup_error = f"No Audible results found for: {query_title}"
         except Exception as exc:

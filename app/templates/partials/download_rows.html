@@ -66,8 +66,26 @@
     </div>
     {% endif %}
   </td>
-  <td class="text-muted small">
-    {{ dl.created_at.strftime("%Y-%m-%d %H:%M") if dl.created_at else "—" }}
+  <td>
+    {% set conf = dl.metadata.get('match_confidence') %}
+    {% if conf is not none %}
+      {% if conf >= 90 %}
+      <span class="badge" style="background:rgba(46,160,67,0.2);color:#3fb950;border:1px solid rgba(46,160,67,0.3);" title="Auto-matched">
+        <i class="bi bi-patch-check-fill me-1"></i>{{ conf }}%
+      </span>
+      {% elif conf >= 70 %}
+      <span class="badge" style="background:rgba(210,153,34,0.2);color:#e3b341;border:1px solid rgba(210,153,34,0.3);" title="Review recommended">
+        <i class="bi bi-patch-question-fill me-1"></i>{{ conf }}%
+      </span>
+      {% else %}
+      <span class="badge" style="background:rgba(240,71,71,0.2);color:#f04747;border:1px solid rgba(240,71,71,0.3);" title="Low confidence — manual match needed">
+        <i class="bi bi-patch-exclamation-fill me-1"></i>{{ conf }}%
+      </span>
+      {% endif %}
+    {% else %}
+    <span class="text-muted small">—</span>
+    {% endif %}
+    <div class="text-muted small mt-1">{{ dl.created_at.strftime("%Y-%m-%d %H:%M") if dl.created_at else "" }}</div>
   </td>
   <td>
     <div class="d-flex gap-1 flex-wrap align-items-center">

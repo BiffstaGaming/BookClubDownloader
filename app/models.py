@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Text, DateTime, Index
 from app.database import Base
@@ -33,6 +34,16 @@ class Download(Base):
     m4b_progress = Column(Integer, nullable=True)
     m4b_path = Column(Text, nullable=True)
     conversion_log = Column(Text, nullable=True)
+
+    @property
+    def metadata(self) -> dict:
+        """Parsed download_metadata JSON, or empty dict."""
+        if self.download_metadata:
+            try:
+                return json.loads(self.download_metadata)
+            except Exception:
+                pass
+        return {}
 
 
 class LogEntry(Base):
