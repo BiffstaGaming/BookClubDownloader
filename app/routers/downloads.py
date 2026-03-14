@@ -390,7 +390,7 @@ async def send_to_nzbget(
     # Step 1: Download the NZB file from the appropriate source
     try:
         if nzb_source == "binsearch":
-            nzb_content = BinsearchScraper().download_nzb(nzb_hash)
+            nzb_content = BinsearchScraper().download_nzb(nzb_hash, name=nzb_title)
         else:
             nzb_content = NzbkingScraper().download_nzb(nzb_hash)
     except Exception as exc:

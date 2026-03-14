@@ -99,12 +99,12 @@ class BinsearchScraper:
             logger.error("BinsearchScraper.search failed: %s", exc)
             raise
 
-    def download_nzb(self, nzb_hash: str) -> bytes:
-        """Download an NZB file via GET /nzb?{nzb_hash}=1."""
+    def download_nzb(self, nzb_hash: str, name: str = "") -> bytes:
+        """Download an NZB file via GET /nzb?name={subject}&id={base64_id}."""
         try:
             response = self.session.get(
                 BINSEARCH_BASE + "/nzb",
-                params={nzb_hash: "1"},
+                params={"name": name, "id": nzb_hash},
                 timeout=60,
                 allow_redirects=True,
             )
