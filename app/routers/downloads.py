@@ -242,8 +242,10 @@ async def _auto_process_download(download_id: int):
 
         nzb_name   = dl.post_title or dl.nzb_name or ""
         nzb_title  = _extract_nzb_title(nzb_name)
-        # Use forum-saved author if available, otherwise extract from NZB name
-        nzb_author = saved.get("author") or _extract_nzb_author(nzb_name)
+        # NZB name is the most reliable source at download-complete time —
+        # forum metadata can be wrong (e.g. series name stored as author).
+        # Use saved author only as a fallback when NZB extraction yields nothing.
+        nzb_author = _extract_nzb_author(nzb_name) or saved.get("author", "")
 
         if not abs_url or not abs_token:
             log_to_db("INFO", "auto", f"Download #{download_id} complete — ABS not configured, skipping auto-match", download_id=download_id)
