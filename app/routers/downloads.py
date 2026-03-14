@@ -934,6 +934,52 @@ async def get_convert_form(
     )
 
 
+@router.post("/{download_id}/save-metadata", response_class=HTMLResponse)
+async def save_metadata(
+    request: Request,
+    download_id: int,
+    title: str = Form(default=""),
+    author: str = Form(default=""),
+    series: str = Form(default=""),
+    series_part: str = Form(default=""),
+    input_path: str = Form(default=""),
+    output_file: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    dl = db.query(Download).filter(Download.id == download_id).first()
+    if not dl:
+        return HTMLResponse('<div class="alert alert-danger">Download not found.</div>')
+
+    saved = dl.parsed_metadata
+    saved.update({
+        "title":       title,
+        "author":      author,
+        "series":      series,
+        "series_part": series_part,
+        "input_path":  input_path,
+        "output_file": output_file,
+    })
+    # Clear match_confidence so the next Fetch from Audible uses the new values
+    saved.pop("match_confidence", None)
+    dl.download_metadata = json.dumps(saved, ensure_ascii=False)
+    db.commit()
+
+    m4b_output_path = get_setting(db, "m4b_output_path")
+    safe_title = _sanitize_filename(title or dl.post_title or dl.nzb_name or "output")
+    default_output = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
+
+    return templates.TemplateResponse(
+        "partials/convert_form.html",
+        {
+            "request":        request,
+            "dl":             dl,
+            "saved":          saved,
+            "suggested_output": output_file or default_output,
+            "save_success":   True,
+        },
+    )
+
+
 @router.post("/{download_id}/convert", response_class=HTMLResponse)
 async def start_convert(
     request: Request,
