@@ -153,8 +153,12 @@ async def _abs_scan_and_match(download_id: int, title: str, author: str, abs_url
         return
 
     try:
-        client.quick_match(item_id, title, author)
-        log_to_db("INFO", "abs", f"Quick Match complete for ABS item {item_id}", download_id=download_id)
+        result = client.quick_match(item_id, title, author)
+        updated = result.get("updated", False)
+        if updated:
+            log_to_db("INFO", "abs", f"Quick Match applied successfully for ABS item {item_id}", download_id=download_id)
+        else:
+            log_to_db("WARNING", "abs", f"Quick Match found no update for ABS item {item_id} — response: {result}", download_id=download_id)
     except Exception as exc:
         log_to_db("ERROR", "abs", f"Quick Match failed for item {item_id}: {exc}", download_id=download_id)
 
@@ -496,12 +500,27 @@ async def sync_status(request: Request, db: Session = Depends(get_db)):
         history = client.get_history()
         history_by_id = {item.get("NZBID"): item for item in history}
 
+        # Also fetch the active queue to get download progress %
+        queue = client.get_queue()
+        queue_by_id = {item.get("NZBID"): item for item in queue}
+
         for dl in pending:
+            # Update download progress from active queue
+            q_item = queue_by_id.get(dl.nzbget_id)
+            if q_item:
+                file_mb = q_item.get("FileSizeMB", 0)
+                remaining_mb = q_item.get("RemainingSizeMB", 0)
+                if file_mb > 0:
+                    pct = round((file_mb - remaining_mb) / file_mb * 100)
+                    dl.download_progress = max(0, min(99, pct))
+
+            # Check history for completion
             item = history_by_id.get(dl.nzbget_id)
             if item:
                 raw_status = item.get("Status", "").upper()
                 if "SUCCESS" in raw_status:
                     dl.status = "downloaded"
+                    dl.download_progress = 100
                     # Capture the path where nzbget stored the files
                     final_dir = item.get("FinalDir") or item.get("DestDir", "")
                     if final_dir:

@@ -36,13 +36,18 @@ class AbsClient:
         results = resp.json().get("book", [])
         return [r["libraryItem"] for r in results if "libraryItem" in r]
 
-    def quick_match(self, item_id: str, title: str = "", author: str = "") -> dict:
+    def quick_match(self, item_id: str, title: str = "", author: str = "", provider: str = "audible") -> dict:
         """Trigger Quick Match on a library item to fill cover and metadata."""
-        body = {}
+        body = {"provider": provider}
         if title:
             body["title"] = title
         if author:
             body["author"] = author
         resp = self._post(f"/api/items/{item_id}/match", json=body)
         resp.raise_for_status()
-        return resp.json()
+        result = resp.json()
+        logger.info(
+            "AbsClient.quick_match: item=%s provider=%s updated=%s",
+            item_id, provider, result.get("updated"),
+        )
+        return result
