@@ -5,7 +5,7 @@ import re
 import shutil
 import unicodedata
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -96,7 +96,7 @@ async def _run_m4b_conversion(
         if title:
             cmd += [f"--name={title}", f"--album={title}"]
         if author:
-            cmd += [f"--artist={author}", f"--album-artist={author}"]
+            cmd += [f"--artist={author}", f"--albumartist={author}"]
         if series:
             cmd.append(f"--series={series}")
         if series_part:
@@ -377,12 +377,15 @@ async def start_convert(
     )
 
     display_name = title or dl.post_title or dl.nzb_name or f"Download #{download_id}"
-    return HTMLResponse(
+    content = (
         f'<div class="alert alert-info">'
         f'<i class="bi bi-arrow-repeat me-2"></i>'
         f'<strong>{display_name}</strong> is being converted to M4B. '
         f'Status will update automatically on this page.</div>'
     )
+    response = HTMLResponse(content)
+    response.headers["HX-Trigger"] = "refreshDownloads"
+    return response
 
 
 @router.delete("/{download_id}", response_class=HTMLResponse)
