@@ -68,6 +68,23 @@ def _resolve_move_template(template: str, title: str, author: str, series: str, 
     return "/" + result
 
 
+_AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".flac", ".wav", ".ogg", ".aac", ".opus"}
+
+
+def _find_audio_dirs(base_path: str) -> list[str]:
+    """
+    Walk base_path recursively and return every directory that contains at
+    least one audio file, sorted so chapters stay in order.
+    Falls back to [base_path] if nothing is found.
+    """
+    found = []
+    for root, dirs, files in os.walk(base_path):
+        dirs.sort()  # walk in alphabetical order
+        if any(os.path.splitext(f)[1].lower() in _AUDIO_EXTS for f in files):
+            found.append(root)
+    return found or [base_path]
+
+
 def _map_path(path: str, nzbget_prefix: str, local_prefix: str) -> str:
     """Replace the nzbget path prefix with the local path prefix."""
     if nzbget_prefix and local_prefix and path.startswith(nzbget_prefix):
@@ -88,8 +105,12 @@ async def _run_m4b_conversion(
     db = SessionLocal()
     try:
         move_template = get_setting(db, "m4b_move_template")
+        audio_dirs = _find_audio_dirs(input_path)
+        log_to_db("DEBUG", "conversion",
+                  f"Audio directories found: {audio_dirs}", download_id=download_id)
+
         cmd = [
-            "m4b-tool", "merge", input_path,
+            "m4b-tool", "merge", *audio_dirs,
             f"--output-file={output_file}",
             "--no-interaction",
         ]
