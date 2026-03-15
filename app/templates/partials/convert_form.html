@@ -11,6 +11,26 @@
     </button>
   </div>
   <div class="bc-card-body">
+    {% if dl.m4b_status == "converting" %}
+    <div class="alert alert-warning d-flex align-items-center gap-3 mb-3">
+      <span class="spinner-border spinner-border-sm flex-shrink-0" role="status"></span>
+      <div class="flex-grow-1">
+        <strong>Conversion in progress{% if dl.m4b_progress is not none %} ({{ dl.m4b_progress }}%){% endif %}</strong>
+        — or the process may have stopped unexpectedly.
+        If no conversion is actively running, reset the status to try again.
+      </div>
+      <button
+        type="button"
+        class="btn btn-sm btn-outline-warning flex-shrink-0"
+        hx-post="/downloads/{{ dl.id }}/reset-conversion"
+        hx-target="#convert-panel"
+        hx-swap="innerHTML"
+        hx-confirm="Reset the conversion status so you can restart it?"
+      >
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+      </button>
+    </div>
+    {% endif %}
     {% if save_success %}
     <div class="alert alert-success py-2 mb-3">
       <i class="bi bi-check-circle-fill me-2"></i>Metadata saved. Click <strong>Fetch from Audible</strong> to search with the updated values.

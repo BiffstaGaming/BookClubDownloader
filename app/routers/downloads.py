@@ -293,28 +293,50 @@ async def _auto_process_download(download_id: int):
             saved["match_confidence"] = confidence
 
             if confidence >= AUTO_MATCH_THRESHOLD and dl.download_path:
-                safe_title  = _sanitize_filename(saved["title"] or nzb_title)
-                output_file = (
-                    os.path.join(m4b_output, f"{safe_title}.m4b").replace("\\", "/")
-                    if m4b_output else f"/m4b/{safe_title}.m4b"
-                )
-                saved["input_path"]  = dl.download_path
-                saved["output_file"] = output_file
-                dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-                dl.m4b_status        = "converting"
-                dl.m4b_progress      = None
-                db.commit()
-                db.close()
-                db = None
+                # Validate path exists and has audio files BEFORE locking status to "converting"
+                path_ok = os.path.isdir(dl.download_path)
+                has_audio = False
+                if path_ok:
+                    for root, _, files in os.walk(dl.download_path):
+                        if any(f.lower().endswith((".mp3", ".m4b", ".m4a", ".flac")) for f in files):
+                            has_audio = True
+                            break
 
-                log_to_db("INFO", "auto",
-                    f"Download #{download_id}: auto-converting — confidence {confidence}% ≥ {AUTO_MATCH_THRESHOLD}%",
-                    download_id=download_id)
-                await _run_m4b_conversion(
-                    download_id, dl.download_path, output_file,
-                    saved["title"], saved["author"],
-                    saved.get("series", ""), saved.get("series_part", ""),
-                )
+                if not path_ok:
+                    log_to_db("WARNING", "auto",
+                        f"Download #{download_id}: path does not exist '{dl.download_path}' — skipping auto-convert",
+                        download_id=download_id)
+                    dl.download_metadata = json.dumps(saved, ensure_ascii=False)
+                    db.commit()
+                elif not has_audio:
+                    log_to_db("WARNING", "auto",
+                        f"Download #{download_id}: no audio files in '{dl.download_path}' — skipping auto-convert",
+                        download_id=download_id)
+                    dl.download_metadata = json.dumps(saved, ensure_ascii=False)
+                    db.commit()
+                else:
+                    safe_title  = _sanitize_filename(saved["title"] or nzb_title)
+                    output_file = (
+                        os.path.join(m4b_output, f"{safe_title}.m4b").replace("\\", "/")
+                        if m4b_output else f"/m4b/{safe_title}.m4b"
+                    )
+                    saved["input_path"]  = dl.download_path
+                    saved["output_file"] = output_file
+                    dl.download_metadata = json.dumps(saved, ensure_ascii=False)
+                    dl.m4b_status        = "converting"
+                    dl.m4b_progress      = None
+                    db.commit()
+                    db.close()
+                    db = None
+
+                    log_to_db("INFO", "auto",
+                        f"Download #{download_id}: auto-converting — confidence {confidence}% ≥ {AUTO_MATCH_THRESHOLD}%",
+                        download_id=download_id)
+                    await _run_m4b_conversion(
+                        download_id, dl.download_path, output_file,
+                        saved["title"], saved["author"],
+                        saved.get("series", ""), saved.get("series_part", ""),
+                    )
             else:
                 dl.download_metadata = json.dumps(saved, ensure_ascii=False)
                 db.commit()
@@ -328,6 +350,17 @@ async def _auto_process_download(download_id: int):
         except Exception as exc:
             logger.error("_auto_process_download failed for #%d: %s", download_id, exc)
             log_to_db("ERROR", "auto", f"Auto-match failed for #{download_id}: {exc}", download_id=download_id)
+            # If we already set status to "converting" before the error, reset it so the user isn't stuck
+            try:
+                _db = SessionLocal()
+                stuck = _db.query(Download).filter(Download.id == download_id).first()
+                if stuck and stuck.m4b_status == "converting":
+                    stuck.m4b_status    = "m4b_failed"
+                    stuck.conversion_log = f"Auto-conversion error: {exc}"
+                    _db.commit()
+                _db.close()
+            except Exception:
+                pass
     finally:
         if db:
             db.close()
@@ -1042,6 +1075,44 @@ async def delete_download(download_id: int, db: Session = Depends(get_db)):
         db.delete(dl)
         db.commit()
     return HTMLResponse("")  # HTMX swaps the row with nothing, removing it
+
+
+@router.post("/{download_id}/reset-conversion", response_class=HTMLResponse)
+async def reset_conversion(
+    request: Request,
+    download_id: int,
+    db: Session = Depends(get_db),
+):
+    """Clear a stuck/failed conversion status so the user can retry."""
+    dl = db.query(Download).filter(Download.id == download_id).first()
+    if not dl:
+        return HTMLResponse(f'<div class="alert alert-danger">Download #{download_id} not found.</div>')
+
+    dl.m4b_status   = None
+    dl.m4b_progress = None
+    db.commit()
+    log_to_db("INFO", "conversion", f"Conversion status manually reset for download #{download_id}", download_id=download_id)
+
+    saved = {}
+    if dl.download_metadata:
+        try:
+            saved = json.loads(dl.download_metadata)
+        except Exception:
+            pass
+
+    m4b_output_path = get_setting(db, "m4b_output_path")
+    safe_title      = _sanitize_filename(saved.get("title") or dl.post_title or dl.nzb_name or "output")
+    default_output  = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
+
+    return templates.TemplateResponse(
+        "partials/convert_form.html",
+        {
+            "request":          request,
+            "dl":               dl,
+            "saved":            saved,
+            "suggested_output": saved.get("output_file") or default_output,
+        },
+    )
 
 
 @router.get("/{download_id}/conversion-log", response_class=HTMLResponse)
