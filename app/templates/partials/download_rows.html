@@ -41,7 +41,14 @@
     {% else %}
     <span class="badge bc-badge-muted">{{ dl.status }}</span>
     {% endif %}
-    {% if dl.m4b_status == "converting" %}
+    {% set qpos = (queue_positions or {}).get(dl.id) %}
+    {% if dl.m4b_status == "queued" %}
+    <div class="mt-1">
+      <span class="badge" style="background:rgba(210,153,34,0.25);color:#e3b341;border:1px solid rgba(210,153,34,0.35);">
+        <i class="bi bi-hourglass-split me-1"></i>Queue{% if qpos %} #{{ qpos }}{% endif %}
+      </span>
+    </div>
+    {% elif dl.m4b_status == "converting" %}
     <div class="mt-1">
       <span class="badge" style="background:var(--accent);color:#fff;">
         <span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;" role="status"></span>Converting{% if dl.m4b_progress is not none %} {{ dl.m4b_progress }}%{% else %}…{% endif %}
@@ -98,6 +105,17 @@
         onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
       >
         <i class="bi bi-file-earmark-music me-1"></i>Convert
+      </button>
+      {% elif dl.m4b_status == "queued" %}
+      <button
+        class="btn bc-btn-sm-danger"
+        hx-post="/downloads/{{ dl.id }}/reset-conversion"
+        hx-target="closest tr"
+        hx-swap="outerHTML"
+        hx-confirm="Remove this conversion from the queue?"
+        title="Remove from queue"
+      >
+        <i class="bi bi-x-circle me-1"></i>Dequeue
       </button>
       {% elif dl.m4b_status == "converting" %}
       <button

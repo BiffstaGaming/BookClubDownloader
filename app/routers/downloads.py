@@ -115,6 +115,20 @@ def _write_abs_metadata(m4b_path: str, title: str, author: str, series: str, ser
 
 AUTO_MATCH_THRESHOLD = 90  # confidence % required for automatic conversion
 
+# Only one m4b-tool process runs at a time.  Others wait in order.
+_conversion_semaphore = asyncio.Semaphore(1)
+
+
+def _get_queue_positions(db: Session) -> dict:
+    """Return {download_id: queue_position} for all downloads with m4b_status='queued'."""
+    queued = (
+        db.query(Download)
+        .filter(Download.m4b_status == "queued")
+        .order_by(Download.id)
+        .all()
+    )
+    return {dl.id: i + 1 for i, dl in enumerate(queued)}
+
 
 def _parse_nzb_name(name: str) -> tuple[str, str]:
     """
@@ -323,16 +337,16 @@ async def _auto_process_download(download_id: int):
                     saved["input_path"]  = dl.download_path
                     saved["output_file"] = output_file
                     dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-                    dl.m4b_status        = "converting"
+                    dl.m4b_status        = "queued"
                     dl.m4b_progress      = None
                     db.commit()
                     db.close()
                     db = None
 
                     log_to_db("INFO", "auto",
-                        f"Download #{download_id}: auto-converting — confidence {confidence}% ≥ {AUTO_MATCH_THRESHOLD}%",
+                        f"Download #{download_id}: queued for auto-conversion — confidence {confidence}% ≥ {AUTO_MATCH_THRESHOLD}%",
                         download_id=download_id)
-                    await _run_m4b_conversion(
+                    await _queued_conversion(
                         download_id, dl.download_path, output_file,
                         saved["title"], saved["author"],
                         saved.get("series", ""), saved.get("series_part", ""),
@@ -416,6 +430,32 @@ async def _abs_scan_and_match(download_id: int, title: str, author: str, abs_url
             log_to_db("WARNING", "abs", f"Quick Match found no update for ABS item {item_id} — response: {result}", download_id=download_id)
     except Exception as exc:
         log_to_db("ERROR", "abs", f"Quick Match failed for item {item_id}: {exc}", download_id=download_id)
+
+
+async def _queued_conversion(
+    download_id: int,
+    input_path: str,
+    output_file: str,
+    title: str,
+    author: str,
+    series: str,
+    series_part: str,
+):
+    """Queue wrapper: waits for the semaphore, then runs _run_m4b_conversion."""
+    async with _conversion_semaphore:
+        # Now at the front of the queue — transition from "queued" → "converting"
+        _db = SessionLocal()
+        try:
+            _dl = _db.query(Download).filter(Download.id == download_id).first()
+            if _dl:
+                _dl.m4b_status   = "converting"
+                _dl.m4b_progress = None
+                _db.commit()
+        finally:
+            _db.close()
+        await _run_m4b_conversion(
+            download_id, input_path, output_file, title, author, series, series_part,
+        )
 
 
 async def _run_m4b_conversion(
@@ -755,7 +795,7 @@ async def downloads_page(request: Request, db: Session = Depends(get_db)):
 def _apply_dl_filter(q, dl_filter: str):
     """Apply status filter to a Download query."""
     if dl_filter == "active":
-        # Show: downloading (sent) OR downloaded-but-not-yet-converted
+        # Show: downloading (sent) OR downloaded-but-not-yet-converted (includes queued/converting)
         # NULL m4b_status must be handled explicitly — SQL NULL != 'converted' evaluates to NULL not TRUE
         q = q.filter(
             or_(
@@ -802,7 +842,7 @@ async def sync_status(
         downloads = _fetch_downloads()
         return templates.TemplateResponse(
             "partials/download_rows.html",
-            {"request": request, "downloads": downloads},
+            {"request": request, "downloads": downloads, "queue_positions": _get_queue_positions(db)},
         )
 
     try:
@@ -848,7 +888,7 @@ async def sync_status(
     downloads = _fetch_downloads()
     return templates.TemplateResponse(
         "partials/download_rows.html",
-        {"request": request, "downloads": downloads},
+        {"request": request, "downloads": downloads, "queue_positions": _get_queue_positions(db)},
     )
 
 
@@ -952,7 +992,7 @@ async def reset_conversion(
     log_to_db("INFO", "conversion", f"Conversion status manually reset for download #{download_id}", download_id=download_id)
     return templates.TemplateResponse(
         "partials/download_rows.html",
-        {"request": request, "downloads": [dl]},
+        {"request": request, "downloads": [dl], "queue_positions": _get_queue_positions(db)},
     )
 
 
@@ -1067,12 +1107,12 @@ async def start_convert(
         "input_path": input_path,
         "output_file": output_file,
     }, ensure_ascii=False)
-    dl.m4b_status = "converting"
+    dl.m4b_status = "queued"
     dl.m4b_progress = None
     db.commit()
 
     background_tasks.add_task(
-        _run_m4b_conversion,
+        _queued_conversion,
         download_id, input_path, output_file, title, author, series, series_part,
     )
 
