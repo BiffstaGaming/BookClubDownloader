@@ -334,7 +334,10 @@ async def _auto_process_download(download_id: int):
                         os.path.join(m4b_output, f"{safe_title}.m4b").replace("\\", "/")
                         if m4b_output else f"/m4b/{safe_title}.m4b"
                     )
-                    saved["input_path"]  = dl.download_path
+                    # Capture plain values before closing session — accessing ORM
+                    # attributes on a detached instance raises DetachedInstanceError.
+                    download_path        = dl.download_path
+                    saved["input_path"]  = download_path
                     saved["output_file"] = output_file
                     dl.download_metadata = json.dumps(saved, ensure_ascii=False)
                     dl.m4b_status        = "queued"
@@ -347,7 +350,7 @@ async def _auto_process_download(download_id: int):
                         f"Download #{download_id}: queued for auto-conversion — confidence {confidence}% ≥ {AUTO_MATCH_THRESHOLD}%",
                         download_id=download_id)
                     await _queued_conversion(
-                        download_id, dl.download_path, output_file,
+                        download_id, download_path, output_file,
                         saved["title"], saved["author"],
                         saved.get("series", ""), saved.get("series_part", ""),
                     )
