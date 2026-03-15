@@ -936,6 +936,26 @@ async def metadata_lookup(
     )
 
 
+@router.post("/{download_id}/reset-conversion", response_class=HTMLResponse)
+async def reset_conversion(
+    request: Request,
+    download_id: int,
+    db: Session = Depends(get_db),
+):
+    """Reset a stuck 'converting' status back to allow retry."""
+    dl = db.query(Download).filter(Download.id == download_id).first()
+    if not dl:
+        return HTMLResponse('<tr><td colspan="6">Not found.</td></tr>')
+    dl.m4b_status   = None
+    dl.m4b_progress = None
+    db.commit()
+    log_to_db("INFO", "conversion", f"Conversion status manually reset for download #{download_id}", download_id=download_id)
+    return templates.TemplateResponse(
+        "partials/download_rows.html",
+        {"request": request, "downloads": [dl]},
+    )
+
+
 @router.get("/{download_id}/convert", response_class=HTMLResponse)
 async def get_convert_form(
     request: Request,

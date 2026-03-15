@@ -317,9 +317,24 @@ class AbookScraper:
                 key = key.strip().lower()
                 value = value.strip()
                 if not value and i + 1 < len(non_empty):
-                    # Value is on the next line (multi-line format)
-                    value = non_empty[i + 1]
-                    i += 2
+                    # Value may span multiple lines when the HTML splits the text
+                    # across elements (e.g. <b>Charlie</b> <b>N.</b> <b>Holmberg</b>
+                    # → ["Charlie", "N.", "Holmberg"] after get_text separator="\n").
+                    # Collect all continuation lines until the next key line.
+                    parts = []
+                    j = i + 1
+                    while j < len(non_empty):
+                        candidate = non_empty[j]
+                        colon_pos = candidate.find(":")
+                        if colon_pos > 0:
+                            before = candidate[:colon_pos].strip()
+                            # A short word-only string before a colon = new key
+                            if len(before) <= 25 and re.match(r'^[\w\s]+$', before):
+                                break
+                        parts.append(candidate)
+                        j += 1
+                    value = " ".join(parts).strip()
+                    i = j
                 else:
                     i += 1
                 # Sanity-check: real keys are short; skip long description sentences

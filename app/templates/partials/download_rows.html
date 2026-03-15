@@ -99,6 +99,27 @@
       >
         <i class="bi bi-file-earmark-music me-1"></i>Convert
       </button>
+      {% elif dl.m4b_status == "converting" %}
+      <button
+        class="btn bc-btn-sm-danger"
+        hx-post="/downloads/{{ dl.id }}/reset-conversion"
+        hx-target="closest tr"
+        hx-swap="outerHTML"
+        hx-confirm="Reset the stuck conversion status? Any running conversion will be abandoned."
+        title="Reset stuck conversion"
+      >
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+      </button>
+      <button
+        class="btn bc-btn-sm-primary"
+        hx-get="/downloads/{{ dl.id }}/convert"
+        hx-target="#convert-panel"
+        hx-swap="innerHTML"
+        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
+        title="Open convert form"
+      >
+        <i class="bi bi-file-earmark-music me-1"></i>Convert
+      </button>
       {% elif dl.m4b_status in ("m4b_failed", "move_failed") %}
       <button
         class="btn bc-btn-sm-primary"
