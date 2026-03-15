@@ -208,7 +208,7 @@ class AbookScraper:
                 if poster_div:
                     h4 = poster_div.find("h4")
                     if h4:
-                        author = h4.get_text(strip=True)
+                        author = h4.get_text(separator=" ", strip=True)
 
                 # Subject line is in <h5 id="subject_MSGID">
                 subject_el = wrapper.find("h5", id=f"subject_{msg_id}")

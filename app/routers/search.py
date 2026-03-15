@@ -82,11 +82,14 @@ async def get_topic(
             f"Failed to load topic: {exc}</div>"
         )
 
+    abook_url = get_setting(db, "abook_url") or ""
+    topic_url = f"{abook_url.rstrip('/')}?topic={topic_id}" if abook_url else ""
     return templates.TemplateResponse(
         "partials/topic_content.html",
         {
             "request": request,
             "topic": topic,
+            "topic_url": topic_url,
             "revealed_posts": {},
         },
     )
@@ -141,11 +144,14 @@ async def thank_post(
         }
     }
 
+    abook_url = get_setting(db, "abook_url") or ""
+    topic_url = f"{abook_url.rstrip('/')}?topic={topic_id}" if abook_url else ""
     return templates.TemplateResponse(
         "partials/topic_content.html",
         {
             "request": request,
             "topic": topic,
+            "topic_url": topic_url,
             "post_title": post_title,
             "revealed_posts": revealed_posts,
         },

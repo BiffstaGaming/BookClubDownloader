@@ -12,6 +12,11 @@
           <i class="bi bi-person-circle text-accent"></i>
           <span class="fw-semibold">{{ post.author or "Unknown author" }}</span>
           <span class="text-muted small">&bull; Post #{{ post.msg_id }}</span>
+          {% if topic_url %}
+          <a href="{{ topic_url }}" target="_blank" rel="noopener" class="ms-auto text-muted small" title="Open forum post">
+            <i class="bi bi-box-arrow-up-right me-1"></i>View on Forum
+          </a>
+          {% endif %}
         </div>
 
         {# Use freshly-thanked data if present, otherwise fall back to already-revealed data from get_topic #}
@@ -24,82 +29,75 @@
           <div class="bc-revealed-label mb-2">
             <i class="bi bi-unlock-fill me-1"></i>Revealed Content
           </div>
-          <div class="row g-2 mb-3">
-            <div class="col-sm-6">
-              <div class="bc-info-box">
-                <div class="bc-info-label">Search Term</div>
-                <div class="bc-info-value">
-                  {% if rev.search_term %}
-                  <code>{{ rev.search_term }}</code>
-                  {% else %}
-                  <span class="text-muted">Not found</span>
-                  {% endif %}
-                </div>
-              </div>
-            </div>
-            <div class="col-sm-6">
-              <div class="bc-info-box">
-                <div class="bc-info-label">Password</div>
-                <div class="bc-info-value">
-                  {% if rev.password %}
-                  <span class="bc-password-badge">
-                    <i class="bi bi-key-fill me-1"></i>{{ rev.password }}
-                  </span>
-                  {% else %}
-                  <span class="text-muted">None</span>
-                  {% endif %}
-                </div>
-              </div>
-            </div>
-          </div>
 
-          {% if rev.search_term %}
-          <!-- Extracted book metadata -->
-          {% if rev.title or rev.author or rev.series %}
-          <div class="row g-2 mb-3">
-            {% if rev.title %}
-            <div class="col-sm-6">
-              <div class="bc-info-box">
-                <div class="bc-info-label">Title</div>
-                <div class="bc-info-value">{{ rev.title }}</div>
-              </div>
-            </div>
-            {% endif %}
-            {% if rev.author %}
-            <div class="col-sm-6">
-              <div class="bc-info-box">
-                <div class="bc-info-label">Author</div>
-                <div class="bc-info-value">{{ rev.author }}</div>
-              </div>
-            </div>
-            {% endif %}
-            {% if rev.series %}
-            <div class="col-sm-6">
-              <div class="bc-info-box">
-                <div class="bc-info-label">Series</div>
-                <div class="bc-info-value">{{ rev.series }}{% if rev.series_part %} #{{ rev.series_part }}{% endif %}</div>
-              </div>
-            </div>
-            {% endif %}
-            {% if rev.narrator %}
-            <div class="col-sm-6">
-              <div class="bc-info-box">
-                <div class="bc-info-label">Narrator</div>
-                <div class="bc-info-value">{{ rev.narrator }}</div>
-              </div>
-            </div>
-            {% endif %}
-          </div>
-          {% endif %}
-          <!-- Search NZBs buttons -->
+          <!-- Editable search form — search_term and password are inputs so user can correct them -->
           <form
             hx-post="/search/nzb"
             hx-target="#nzb-results"
             hx-swap="innerHTML"
             hx-indicator=".htmx-indicator"
           >
-            <input type="hidden" name="search_term" value="{{ rev.search_term }}" />
-            <input type="hidden" name="password" value="{{ rev.password or '' }}" />
+            <div class="row g-2 mb-3">
+              <div class="col-sm-6">
+                <label class="bc-info-label mb-1">Search Term</label>
+                <input
+                  type="text"
+                  name="search_term"
+                  value="{{ rev.search_term }}"
+                  class="form-control bc-input font-monospace"
+                  placeholder="Paste search term if not detected"
+                />
+              </div>
+              <div class="col-sm-6">
+                <label class="bc-info-label mb-1">Password</label>
+                <input
+                  type="text"
+                  name="password"
+                  value="{{ rev.password or '' }}"
+                  class="form-control bc-input"
+                  placeholder="None"
+                />
+              </div>
+            </div>
+
+            <!-- Extracted book metadata (read-only info) -->
+            {% if rev.title or rev.author or rev.series %}
+            <div class="row g-2 mb-3">
+              {% if rev.title %}
+              <div class="col-sm-6">
+                <div class="bc-info-box">
+                  <div class="bc-info-label">Title</div>
+                  <div class="bc-info-value">{{ rev.title }}</div>
+                </div>
+              </div>
+              {% endif %}
+              {% if rev.author %}
+              <div class="col-sm-6">
+                <div class="bc-info-box">
+                  <div class="bc-info-label">Author</div>
+                  <div class="bc-info-value">{{ rev.author }}</div>
+                </div>
+              </div>
+              {% endif %}
+              {% if rev.series %}
+              <div class="col-sm-6">
+                <div class="bc-info-box">
+                  <div class="bc-info-label">Series</div>
+                  <div class="bc-info-value">{{ rev.series }}{% if rev.series_part %} #{{ rev.series_part }}{% endif %}</div>
+                </div>
+              </div>
+              {% endif %}
+              {% if rev.narrator %}
+              <div class="col-sm-6">
+                <div class="bc-info-box">
+                  <div class="bc-info-label">Narrator</div>
+                  <div class="bc-info-value">{{ rev.narrator }}</div>
+                </div>
+              </div>
+              {% endif %}
+            </div>
+            {% endif %}
+
             <input type="hidden" name="post_title" value="{{ topic.title }}" />
             <input type="hidden" name="topic_id" value="{{ topic.topic_id }}" />
             <input type="hidden" name="msg_id" value="{{ post.msg_id }}" />
@@ -116,17 +114,18 @@
               </button>
             </div>
           </form>
-          {% else %}
-          <div class="alert alert-warning py-2 mb-0">
+
+          {% if not rev.search_term %}
+          <div class="alert alert-warning py-2 mt-2 mb-0">
             <i class="bi bi-exclamation-triangle-fill me-2"></i>
-            Could not automatically extract a search term. Check the raw content below and search manually.
+            Could not automatically extract a search term — type one in the field above and search manually.
           </div>
+          {% endif %}
           {% if rev.raw_text %}
           <details class="mt-2">
             <summary class="text-muted small" style="cursor:pointer;">Show raw post content</summary>
             <pre class="bc-raw-text mt-2">{{ rev.raw_text[:2000] }}</pre>
           </details>
-          {% endif %}
           {% endif %}
         </div>
 
