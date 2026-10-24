@@ -22,7 +22,7 @@
       <button
         type="button"
         class="btn btn-sm btn-outline-warning flex-shrink-0"
-        hx-post="/downloads/{{ dl.id }}/reset-conversion"
+        hx-post="/downloads/{{ dl.id }}/reset-conversion?view=form"
         hx-target="#convert-panel"
         hx-swap="innerHTML"
         hx-confirm="Reset the conversion status so you can restart it?"

@@ -118,6 +118,10 @@ AUTO_MATCH_THRESHOLD = 90  # confidence % required for automatic conversion
 # Only one m4b-tool process runs at a time.  Others wait in order.
 _conversion_semaphore = asyncio.Semaphore(1)
 
+# Latest queued job number per download.  A waiting job whose number is no
+# longer the latest (dequeued, then queued again) is stale and must not run.
+_queue_generation: dict[int, int] = {}
+
 
 def _get_queue_positions(db: Session) -> dict:
     """Return {download_id: queue_position} for all downloads with m4b_status='queued'."""
@@ -444,16 +448,27 @@ async def _queued_conversion(
     series: str,
     series_part: str,
 ):
-    """Queue wrapper: waits for the semaphore, then runs _run_m4b_conversion."""
+    """
+    Queue wrapper: waits for the semaphore, then runs _run_m4b_conversion.
+    Skips the job if it was dequeued (status no longer "queued") or superseded
+    by a newer queue request for the same download while it was waiting.
+    """
+    generation = _queue_generation.get(download_id, 0) + 1
+    _queue_generation[download_id] = generation
+
     async with _conversion_semaphore:
         # Now at the front of the queue — transition from "queued" → "converting"
         _db = SessionLocal()
         try:
             _dl = _db.query(Download).filter(Download.id == download_id).first()
-            if _dl:
-                _dl.m4b_status   = "converting"
-                _dl.m4b_progress = None
-                _db.commit()
+            if not _dl or _dl.m4b_status != "queued" or _queue_generation.get(download_id) != generation:
+                log_to_db("INFO", "conversion",
+                          f"Skipping queued conversion for download #{download_id} — dequeued or superseded",
+                          download_id=download_id)
+                return
+            _dl.m4b_status   = "converting"
+            _dl.m4b_progress = None
+            _db.commit()
         finally:
             _db.close()
         await _run_m4b_conversion(
@@ -983,19 +998,50 @@ async def metadata_lookup(
 async def reset_conversion(
     request: Request,
     download_id: int,
+    view: str = "row",
     db: Session = Depends(get_db),
 ):
-    """Reset a stuck 'converting' status back to allow retry."""
+    """
+    Clear a stuck/failed/queued conversion status so the user can retry.
+    Returns the refreshed table row by default, or the convert form when view=form
+    (used by the Reset button inside the convert panel).
+    """
     dl = db.query(Download).filter(Download.id == download_id).first()
     if not dl:
+        if view == "form":
+            return HTMLResponse(f'<div class="alert alert-danger">Download #{download_id} not found.</div>')
         return HTMLResponse('<tr><td colspan="6">Not found.</td></tr>')
+
     dl.m4b_status   = None
     dl.m4b_progress = None
     db.commit()
     log_to_db("INFO", "conversion", f"Conversion status manually reset for download #{download_id}", download_id=download_id)
+
+    if view != "form":
+        return templates.TemplateResponse(
+            "partials/download_rows.html",
+            {"request": request, "downloads": [dl], "queue_positions": _get_queue_positions(db)},
+        )
+
+    saved = {}
+    if dl.download_metadata:
+        try:
+            saved = json.loads(dl.download_metadata)
+        except Exception:
+            pass
+
+    m4b_output_path = get_setting(db, "m4b_output_path")
+    safe_title      = _sanitize_filename(saved.get("title") or dl.post_title or dl.nzb_name or "output")
+    default_output  = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
+
     return templates.TemplateResponse(
-        "partials/download_rows.html",
-        {"request": request, "downloads": [dl], "queue_positions": _get_queue_positions(db)},
+        "partials/convert_form.html",
+        {
+            "request":          request,
+            "dl":               dl,
+            "saved":            saved,
+            "suggested_output": saved.get("output_file") or default_output,
+        },
     )
 
 
@@ -1138,44 +1184,6 @@ async def delete_download(download_id: int, db: Session = Depends(get_db)):
         db.delete(dl)
         db.commit()
     return HTMLResponse("")  # HTMX swaps the row with nothing, removing it
-
-
-@router.post("/{download_id}/reset-conversion", response_class=HTMLResponse)
-async def reset_conversion(
-    request: Request,
-    download_id: int,
-    db: Session = Depends(get_db),
-):
-    """Clear a stuck/failed conversion status so the user can retry."""
-    dl = db.query(Download).filter(Download.id == download_id).first()
-    if not dl:
-        return HTMLResponse(f'<div class="alert alert-danger">Download #{download_id} not found.</div>')
-
-    dl.m4b_status   = None
-    dl.m4b_progress = None
-    db.commit()
-    log_to_db("INFO", "conversion", f"Conversion status manually reset for download #{download_id}", download_id=download_id)
-
-    saved = {}
-    if dl.download_metadata:
-        try:
-            saved = json.loads(dl.download_metadata)
-        except Exception:
-            pass
-
-    m4b_output_path = get_setting(db, "m4b_output_path")
-    safe_title      = _sanitize_filename(saved.get("title") or dl.post_title or dl.nzb_name or "output")
-    default_output  = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
-
-    return templates.TemplateResponse(
-        "partials/convert_form.html",
-        {
-            "request":          request,
-            "dl":               dl,
-            "saved":            saved,
-            "suggested_output": saved.get("output_file") or default_output,
-        },
-    )
 
 
 @router.get("/{download_id}/conversion-log", response_class=HTMLResponse)
