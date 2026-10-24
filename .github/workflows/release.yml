@@ -6,6 +6,7 @@ on:
       - main
     tags:
       - 'v*'
+  pull_request:
   workflow_dispatch:
     inputs:
       tag:
@@ -14,7 +15,26 @@ on:
         default: 'latest'
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest httpx
+
+      - name: Unit tests
+        run: pytest -q
+
   build-and-release:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,7 +47,35 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Build once into the local Docker engine so the image can be tested before publishing
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: bookclub:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — real m4b-tool/tone conversion as a non-root user
+        run: |
+          docker run --rm -e PUID=1000 -e PGID=1000 \
+            -v "$PWD/tests:/tests:ro" bookclub:ci python /tests/smoke/run_smoke.py
+
+      - name: Smoke test — server starts and reports healthy
+        run: |
+          docker run -d --name bookclub-ci -e PUID=1000 -e PGID=1000 -p 9933:9933 bookclub:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:9933/api/health; then echo; break; fi
+            sleep 2
+          done
+          curl -fsS http://localhost:9933/ > /dev/null
+          curl -fsS http://localhost:9933/api/status
+          docker logs bookclub-ci
+          docker rm -f bookclub-ci
+
       - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -46,6 +94,7 @@ jobs:
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push Docker image
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -68,6 +117,6 @@ jobs:
             docker pull ghcr.io/${{ github.repository_owner }}/bookclub:${{ github.ref_name }}
             ```
 
-            ## Portainer / Docker Compose
+            ## Docker Compose
 
-            See `docker-compose.portainer.yml` in the repo for a ready-to-use stack definition.
+            See `compose.yaml` in the repo for a ready-to-use stack definition.

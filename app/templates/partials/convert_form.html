@@ -1,3 +1,4 @@
+{% from "partials/_confidence.html" import confidence_badge %}
 <div class="bc-card step-card">
   <div class="bc-card-header d-flex align-items-center gap-3">
     <i class="bi bi-file-earmark-music-fill text-accent fs-5"></i>
@@ -16,8 +17,7 @@
       <span class="spinner-border spinner-border-sm flex-shrink-0" role="status"></span>
       <div class="flex-grow-1">
         <strong>Conversion in progress{% if dl.m4b_progress is not none %} ({{ dl.m4b_progress }}%){% endif %}</strong>
-        — or the process may have stopped unexpectedly.
-        If no conversion is actively running, reset the status to try again.
+        — stop it to change the details and start again.
       </div>
       <button
         type="button"
@@ -25,140 +25,113 @@
         hx-post="/downloads/{{ dl.id }}/reset-conversion?view=form"
         hx-target="#convert-panel"
         hx-swap="innerHTML"
-        hx-confirm="Reset the conversion status so you can restart it?"
+        hx-confirm="Stop the conversion so you can restart it?"
       >
-        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+        <i class="bi bi-stop-circle me-1"></i>Stop
       </button>
     </div>
     {% endif %}
     {% if save_success %}
     <div class="alert alert-success py-2 mb-3">
-      <i class="bi bi-check-circle-fill me-2"></i>Metadata saved. Click <strong>Fetch from Audible</strong> to search with the updated values.
+      <i class="bi bi-check-circle-fill me-2"></i>{{ save_success }}
     </div>
     {% endif %}
-    <!-- Audible lookup -->
-    <div class="d-flex align-items-center gap-3 mb-4">
-      <button
-        type="button"
-        class="btn bc-btn-outline btn-sm"
-        hx-get="/downloads/{{ dl.id }}/metadata-lookup"
-        hx-target="#convert-panel"
-        hx-swap="innerHTML"
-        hx-indicator=".audible-spinner"
-      >
-        <span class="spinner-border spinner-border-sm audible-spinner htmx-indicator me-1" role="status"></span>
-        <i class="bi bi-search me-1"></i>Fetch from Audible
-      </button>
-      {% set conf = saved.get('match_confidence') %}
-      {% if conf is not none %}
-        {% if conf >= 90 %}
-        <span class="badge" style="background:rgba(46,160,67,0.2);color:#3fb950;border:1px solid rgba(46,160,67,0.3);">
-          <i class="bi bi-patch-check-fill me-1"></i>{{ conf }}% match
-        </span>
-        {% elif conf >= 70 %}
-        <span class="badge" style="background:rgba(210,153,34,0.2);color:#e3b341;border:1px solid rgba(210,153,34,0.3);">
-          <i class="bi bi-patch-question-fill me-1"></i>{{ conf }}% — review recommended
-        </span>
-        {% else %}
-        <span class="badge" style="background:rgba(240,71,71,0.2);color:#f04747;border:1px solid rgba(240,71,71,0.3);">
-          <i class="bi bi-patch-exclamation-fill me-1"></i>{{ conf }}% — low confidence
-        </span>
-        {% endif %}
-      {% else %}
-      <span class="text-muted small">Auto-fill title, author and series from Audible metadata.</span>
-      {% endif %}
-      {% if lookup_error %}
-      <span class="text-warning small"><i class="bi bi-exclamation-triangle me-1"></i>{{ lookup_error }}</span>
-      {% endif %}
+    {% if lookup_error %}
+    <div class="alert alert-warning py-2 mb-3">
+      <i class="bi bi-exclamation-triangle me-2"></i>{{ lookup_error }}
     </div>
+    {% endif %}
+
+    <!-- Current match -->
+    <div class="d-flex align-items-start gap-3 mb-4">
+      {% if saved.get('cover_url') %}
+      <img src="{{ saved.get('cover_url') }}" alt="" class="bc-cover" loading="lazy" referrerpolicy="no-referrer" />
+      {% endif %}
+      <div class="flex-grow-1">
+        <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+          <button
+            type="button"
+            class="btn bc-btn-outline btn-sm"
+            hx-get="/downloads/{{ dl.id }}/metadata-lookup"
+            hx-target="#convert-panel"
+            hx-swap="innerHTML"
+            hx-indicator=".audible-spinner"
+          >
+            <span class="spinner-border spinner-border-sm audible-spinner htmx-indicator me-1" role="status"></span>
+            <i class="bi bi-search me-1"></i>{{ "Choose a different Audible match" if saved.get('asin') else "Find on Audible" }}
+          </button>
+          {{ confidence_badge(saved.get('match_confidence')) }}
+          {% if saved.get('asin') %}<span class="text-muted small">ASIN <code class="bc-code">{{ saved.get('asin') }}</code></span>{% endif %}
+        </div>
+        {% if saved.get('description') %}
+        <div class="text-muted small bc-description">{{ saved.get('description')[:400] }}{% if saved.get('description')|length > 400 %}…{% endif %}</div>
+        {% else %}
+        <div class="text-muted small">Pick the Audible match to fill in narrator, series, cover and description.</div>
+        {% endif %}
+      </div>
+    </div>
+
     <form
       hx-post="/downloads/{{ dl.id }}/convert"
       hx-target="#convert-panel"
       hx-swap="innerHTML"
     >
-      <!-- Metadata row -->
       <div class="row g-3 mb-3">
         <div class="col-sm-6">
           <label class="form-label bc-label">Title</label>
-          <input
-            type="text"
-            name="title"
-            class="form-control bc-input"
-            placeholder="e.g. The Atlantis Covenant"
-            value="{{ saved.get('title') or dl.post_title or dl.nzb_name or '' }}"
-          />
-          <div class="form-text text-muted">Used as the audiobook title tag.</div>
+          <input type="text" name="title" class="form-control bc-input" placeholder="e.g. The Atlantis Covenant"
+                 value="{{ saved.get('title', '') }}" required />
         </div>
         <div class="col-sm-6">
           <label class="form-label bc-label">Author</label>
-          <input
-            type="text"
-            name="author"
-            class="form-control bc-input"
-            placeholder="e.g. Rob Jones"
-            value="{{ saved.get('author', '') }}"
-          />
-          <div class="form-text text-muted">Used as the artist/author tag.</div>
+          <input type="text" name="author" class="form-control bc-input" placeholder="e.g. Rob Jones"
+                 value="{{ saved.get('author', '') }}" required />
         </div>
       </div>
 
-      <!-- Series row -->
       <div class="row g-3 mb-3">
-        <div class="col-sm-8">
+        <div class="col-sm-5">
           <label class="form-label bc-label">Series</label>
-          <input
-            type="text"
-            name="series"
-            class="form-control bc-input"
-            placeholder="e.g. The Hunter Files"
-            value="{{ saved.get('series', '') }}"
-          />
-          <div class="form-text text-muted">Optional. Leave blank if not part of a series.</div>
+          <input type="text" name="series" class="form-control bc-input" placeholder="Leave blank if standalone"
+                 value="{{ saved.get('series', '') }}" />
         </div>
-        <div class="col-sm-4">
-          <label class="form-label bc-label">Book Number</label>
-          <input
-            type="text"
-            name="series_part"
-            class="form-control bc-input"
-            placeholder="e.g. 1"
-            value="{{ saved.get('series_part', '') }}"
-          />
-          <div class="form-text text-muted">Position in the series.</div>
+        <div class="col-sm-2">
+          <label class="form-label bc-label">Book #</label>
+          <input type="text" name="series_part" class="form-control bc-input" placeholder="1"
+                 value="{{ saved.get('series_part', '') }}" />
+        </div>
+        <div class="col-sm-5">
+          <label class="form-label bc-label">Narrator</label>
+          <input type="text" name="narrator" class="form-control bc-input" placeholder="e.g. Ray Porter"
+                 value="{{ saved.get('narrator', '') }}" />
         </div>
       </div>
 
-      <!-- Paths row -->
-      <div class="row g-3 mb-4">
-        <div class="col-sm-6">
+      <div class="row g-3 mb-3">
+        <div class="col-sm-2">
+          <label class="form-label bc-label">Year</label>
+          <input type="text" name="year" class="form-control bc-input" value="{{ saved.get('year', '') }}" />
+        </div>
+        <div class="col-sm-3">
+          <label class="form-label bc-label">ASIN</label>
+          <input type="text" name="asin" class="form-control bc-input font-monospace" value="{{ saved.get('asin', '') }}" />
+        </div>
+        <div class="col-sm-7">
           <label class="form-label bc-label">Input Folder</label>
-          <input
-            type="text"
-            name="input_path"
-            class="form-control bc-input"
-            placeholder="/downloads/completed/Audiobooks/BookTitle"
-            value="{{ saved.get('input_path') or dl.download_path or '' }}"
-            required
-          />
-          <div class="form-text text-muted">
-            Folder containing the MP3 files to merge.
-            {% if not dl.download_path %}
-            <span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>No path recorded — enter manually.</span>
-            {% endif %}
-          </div>
+          <input type="text" name="input_path" class="form-control bc-input"
+                 placeholder="/downloads/completed/Audiobooks/BookTitle"
+                 value="{{ saved.get('input_path') or dl.download_path or '' }}" required />
+          {% if input_problem %}
+          <div class="form-text text-warning"><i class="bi bi-exclamation-triangle me-1"></i>{{ input_problem }}</div>
+          {% endif %}
         </div>
-        <div class="col-sm-6">
-          <label class="form-label bc-label">Output File</label>
-          <input
-            type="text"
-            name="output_file"
-            class="form-control bc-input"
-            placeholder="/m4b/Title.m4b"
-            value="{{ suggested_output }}"
-            required
-          />
-          <div class="form-text text-muted">Full path for the output .m4b file.</div>
-        </div>
+      </div>
+
+      <div class="small text-muted mb-4">
+        <i class="bi bi-folder2-open me-1"></i>Will be saved to
+        <code class="bc-code">{{ destination_preview }}</code>
+        with <code class="bc-code">metadata.json</code>{% if saved.get('cover_url') %} and <code class="bc-code">cover.jpg</code>{% endif %}
+        <a href="/settings" class="ms-1 text-accent">change layout</a>
       </div>
 
       <div class="d-flex align-items-center gap-3 flex-wrap">
@@ -178,7 +151,7 @@
         </button>
         <span class="text-muted small">
           <i class="bi bi-info-circle me-1"></i>
-          Runs <code>m4b-tool merge</code> in the background — conversion may take several minutes.
+          Runs in the background, one book at a time — you can close this page.
         </span>
       </div>
     </form>

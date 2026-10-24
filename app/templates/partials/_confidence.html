@@ -1,0 +1,17 @@
+{% macro confidence_badge(conf, compact=False) %}
+{% if conf is not none %}
+  {% if conf >= 90 %}
+  <span class="badge bc-conf-high" title="Strong match">
+    <i class="bi bi-patch-check-fill me-1"></i>{{ conf }}%{% if not compact %} match{% endif %}
+  </span>
+  {% elif conf >= 70 %}
+  <span class="badge bc-conf-mid" title="Review recommended">
+    <i class="bi bi-patch-question-fill me-1"></i>{{ conf }}%{% if not compact %} — review{% endif %}
+  </span>
+  {% else %}
+  <span class="badge bc-conf-low" title="Low confidence — pick the match manually">
+    <i class="bi bi-patch-exclamation-fill me-1"></i>{{ conf }}%{% if not compact %} — low{% endif %}
+  </span>
+  {% endif %}
+{% endif %}
+{% endmacro %}

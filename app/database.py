@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -12,8 +12,17 @@ if DATABASE_URL == "sqlite:////app/data/bookclub.db" and not os.path.exists("/ap
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    connect_args={"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {},
 )
+
+if DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):
+        # WAL lets the web UI read while the background worker writes progress.
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -38,6 +47,13 @@ def migrate_db():
         ("downloads", "m4b_progress", "INTEGER"),
         ("downloads", "m4b_path", "TEXT"),
         ("downloads", "conversion_log", "TEXT"),
+        ("downloads", "nzb_source", "TEXT"),
+        ("downloads", "nzb_title", "TEXT"),
+        ("downloads", "error_message", "TEXT"),
+        ("downloads", "missing_polls", "INTEGER"),
+        ("downloads", "queued_at", "DATETIME"),
+        ("downloads", "abs_status", "TEXT"),
+        ("downloads", "abs_item_id", "TEXT"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:
@@ -45,4 +61,4 @@ def migrate_db():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
                 conn.commit()
             except Exception:
-                pass  # Column already exists — safe to ignore
+                conn.rollback()  # Column already exists — safe to ignore

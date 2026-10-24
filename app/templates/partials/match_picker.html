@@ -1,0 +1,76 @@
+{% from "partials/_confidence.html" import confidence_badge %}
+<div class="bc-card step-card">
+  <div class="bc-card-header d-flex align-items-center gap-3">
+    <i class="bi bi-search text-accent fs-5"></i>
+    <span>Pick the Audible match — <strong>{{ dl.post_title or dl.nzb_name }}</strong></span>
+    <button type="button" class="btn bc-btn-outline btn-sm ms-auto"
+            hx-get="/downloads/{{ dl.id }}/convert" hx-target="#convert-panel" hx-swap="innerHTML">
+      <i class="bi bi-arrow-left me-1"></i>Back
+    </button>
+  </div>
+  <div class="bc-card-body">
+    <form class="row g-2 align-items-end mb-4"
+          hx-get="/downloads/{{ dl.id }}/metadata-lookup" hx-target="#convert-panel" hx-swap="innerHTML"
+          hx-indicator=".picker-spinner">
+      <div class="col-sm-5">
+        <label class="form-label bc-label">Title</label>
+        <input type="text" name="title" class="form-control bc-input" value="{{ query_title }}" />
+      </div>
+      <div class="col-sm-3">
+        <label class="form-label bc-label">Author</label>
+        <input type="text" name="author" class="form-control bc-input" value="{{ query_author }}" />
+      </div>
+      <div class="col-sm-2">
+        <label class="form-label bc-label">Region</label>
+        <select name="provider" class="form-select bc-input">
+          {% for value, label in providers %}
+          <option value="{{ value }}" {% if value == provider %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-2 d-grid">
+        <button type="submit" class="btn bc-btn-outline">
+          <span class="spinner-border spinner-border-sm picker-spinner htmx-indicator me-1" role="status"></span>
+          <i class="bi bi-search me-1"></i>Search
+        </button>
+      </div>
+    </form>
+
+    {% if candidates %}
+    <div class="d-flex flex-column gap-2">
+      {% for c in candidates %}
+      <div class="bc-candidate d-flex gap-3 align-items-start">
+        {% if c.cover_url %}
+        <img src="{{ c.cover_url }}" alt="" class="bc-cover" loading="lazy" referrerpolicy="no-referrer" />
+        {% else %}
+        <div class="bc-cover bc-cover-empty"><i class="bi bi-book"></i></div>
+        {% endif %}
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold text-primary-light">{{ c.title }}{% if c.subtitle %} <span class="text-muted fw-normal">— {{ c.subtitle }}</span>{% endif %}</div>
+          <div class="small text-muted">
+            {{ c.author or "Unknown author" }}
+            {% if c.narrator %} · read by {{ c.narrator }}{% endif %}
+            {% if c.series %} · {{ c.series }}{% if c.series_part %} #{{ c.series_part }}{% endif %}{% endif %}
+            {% if c.year %} · {{ c.year }}{% endif %}
+            {% if c.duration %} · {{ (c.duration // 60)|int }}h {{ (c.duration % 60)|int }}m{% endif %}
+          </div>
+          {% if c.description %}<div class="small text-muted mt-1 bc-description">{{ c.description[:220] }}{% if c.description|length > 220 %}…{% endif %}</div>{% endif %}
+        </div>
+        <div class="d-flex flex-column align-items-end gap-2 flex-shrink-0">
+          {{ confidence_badge(c.confidence, compact=True) }}
+          <form hx-post="/downloads/{{ dl.id }}/apply-match" hx-target="#convert-panel" hx-swap="innerHTML">
+            <input type="hidden" name="candidate" value="{{ c | tojson | forceescape }}" />
+            <button type="submit" class="btn bc-btn-sm-primary"><i class="bi bi-check2 me-1"></i>Use this</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="bc-empty-state">
+      <i class="bi bi-question-circle fs-2 text-muted mb-3 d-block"></i>
+      <p class="text-muted mb-0">No Audible results. Try a shorter title, drop the author, or switch region.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>

@@ -1,16 +1,38 @@
+{% from "partials/_confidence.html" import confidence_badge %}
+{% macro panel_button(url, icon, label, cls="bc-btn-sm-primary", title="") %}
+<button class="btn {{ cls }}" hx-get="{{ url }}" hx-target="#convert-panel" hx-swap="innerHTML" title="{{ title }}"
+        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})">
+  <i class="bi bi-{{ icon }} me-1"></i>{{ label }}
+</button>
+{% endmacro %}
+{% macro row_button(url, icon, label, confirm="", cls="bc-btn-sm-danger", title="") %}
+<button class="btn {{ cls }}" hx-post="{{ url }}" hx-target="closest tr" hx-swap="outerHTML"
+        {% if confirm %}hx-confirm="{{ confirm }}"{% endif %} title="{{ title }}">
+  <i class="bi bi-{{ icon }} me-1"></i>{{ label }}
+</button>
+{% endmacro %}
 {% if downloads %}
 {% for dl in downloads %}
+{% set meta = dl.parsed_metadata %}
 <tr>
   <td>
-    <div class="fw-semibold text-primary-light">{{ dl.post_title or dl.nzb_name or "—" }}</div>
-    {% if dl.nzb_name and dl.nzb_name != dl.post_title %}
+    <div class="fw-semibold text-primary-light">{{ meta.get('title') or dl.post_title or dl.nzb_name or "—" }}</div>
+    {% if meta.get('author') %}
+    <div class="text-muted small">
+      {{ meta.get('author') }}{% if meta.get('series') %} · {{ meta.get('series') }}{% if meta.get('series_part') %} #{{ meta.get('series_part') }}{% endif %}{% endif %}
+      {% if meta.get('narrator') %} · read by {{ meta.get('narrator') }}{% endif %}
+    </div>
+    {% elif dl.nzb_name and dl.nzb_name != dl.post_title %}
     <div class="text-muted small">{{ dl.nzb_name }}</div>
     {% endif %}
-    {% if dl.m4b_status == "converted" and dl.m4b_path %}
+    {% if dl.m4b_path and dl.m4b_status in ("converted", "move_failed") %}
     <div class="text-muted small mt-1">
-      <i class="bi bi-file-earmark-music-fill text-success me-1"></i>
+      <i class="bi bi-file-earmark-music-fill {{ 'text-success' if dl.m4b_status == 'converted' else 'text-warning' }} me-1"></i>
       <code class="bc-code" style="font-size:0.7rem;">{{ dl.m4b_path }}</code>
     </div>
+    {% endif %}
+    {% if dl.error_message %}
+    <div class="small mt-1 text-warning"><i class="bi bi-exclamation-circle me-1"></i>{{ dl.error_message }}</div>
     {% endif %}
   </td>
   <td>
@@ -37,15 +59,15 @@
     </div>
     {% endif %}
     {% elif dl.status == "failed" %}
-    <span class="badge bc-badge-danger"><i class="bi bi-x-circle-fill me-1"></i>Failed</span>
+    <span class="badge bc-badge-danger"><i class="bi bi-x-circle-fill me-1"></i>Download Failed</span>
     {% else %}
     <span class="badge bc-badge-muted">{{ dl.status }}</span>
     {% endif %}
     {% set qpos = (queue_positions or {}).get(dl.id) %}
     {% if dl.m4b_status == "queued" %}
     <div class="mt-1">
-      <span class="badge" style="background:rgba(210,153,34,0.25);color:#e3b341;border:1px solid rgba(210,153,34,0.35);">
-        <i class="bi bi-hourglass-split me-1"></i>Queue{% if qpos %} #{{ qpos }}{% endif %}
+      <span class="badge bc-conf-mid">
+        <i class="bi bi-hourglass-split me-1"></i>Queued{% if qpos %} #{{ qpos }}{% endif %}
       </span>
     </div>
     {% elif dl.m4b_status == "converting" %}
@@ -71,92 +93,46 @@
     <div class="mt-1">
       <span class="badge bc-badge-danger"><i class="bi bi-folder-x me-1"></i>Move Failed</span>
     </div>
+    {% elif dl.status == "downloaded" and meta.get('auto_processed') %}
+    <div class="mt-1">
+      <span class="badge bc-conf-mid"><i class="bi bi-person-check me-1"></i>Needs review</span>
+    </div>
+    {% endif %}
+    {% if dl.abs_status == "pending" %}
+    <div class="mt-1"><span class="badge bc-badge-muted"><span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Importing to ABS</span></div>
+    {% elif dl.abs_status == "imported" %}
+    <div class="mt-1">
+      {% if abs_url and dl.abs_item_id %}
+      <a href="{{ abs_url }}/item/{{ dl.abs_item_id }}" target="_blank" rel="noopener" class="badge bc-badge-success text-decoration-none">
+        <i class="bi bi-collection-play-fill me-1"></i>In Audiobookshelf <i class="bi bi-box-arrow-up-right ms-1"></i>
+      </a>
+      {% else %}
+      <span class="badge bc-badge-success"><i class="bi bi-collection-play-fill me-1"></i>In Audiobookshelf</span>
+      {% endif %}
+    </div>
+    {% elif dl.abs_status in ("not_found", "failed") %}
+    <div class="mt-1"><span class="badge bc-badge-danger"><i class="bi bi-collection-play me-1"></i>ABS import failed</span></div>
     {% endif %}
   </td>
   <td>
-    {% set conf = dl.parsed_metadata.get('match_confidence') %}
-    {% if conf is not none %}
-      {% if conf >= 90 %}
-      <span class="badge" style="background:rgba(46,160,67,0.2);color:#3fb950;border:1px solid rgba(46,160,67,0.3);" title="Auto-matched">
-        <i class="bi bi-patch-check-fill me-1"></i>{{ conf }}%
-      </span>
-      {% elif conf >= 70 %}
-      <span class="badge" style="background:rgba(210,153,34,0.2);color:#e3b341;border:1px solid rgba(210,153,34,0.3);" title="Review recommended">
-        <i class="bi bi-patch-question-fill me-1"></i>{{ conf }}%
-      </span>
-      {% else %}
-      <span class="badge" style="background:rgba(240,71,71,0.2);color:#f04747;border:1px solid rgba(240,71,71,0.3);" title="Low confidence — manual match needed">
-        <i class="bi bi-patch-exclamation-fill me-1"></i>{{ conf }}%
-      </span>
-      {% endif %}
-    {% else %}
-    <span class="text-muted small">—</span>
-    {% endif %}
+    {{ confidence_badge(meta.get('match_confidence'), compact=True) }}
+    {% if meta.get('match_confidence') is none %}<span class="text-muted small">—</span>{% endif %}
     <div class="text-muted small mt-1">{{ dl.created_at.strftime("%Y-%m-%d %H:%M") if dl.created_at else "" }}</div>
   </td>
   <td>
     <div class="d-flex gap-1 flex-wrap align-items-center">
-      {% if dl.status == "downloaded" and dl.m4b_status not in ("converting", "converted") %}
-      <button
-        class="btn bc-btn-sm-primary"
-        hx-get="/downloads/{{ dl.id }}/convert"
-        hx-target="#convert-panel"
-        hx-swap="innerHTML"
-        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
-      >
-        <i class="bi bi-file-earmark-music me-1"></i>Convert
-      </button>
+      {% if dl.status == "failed" %}
+        {% if dl.nzb_hash %}{{ row_button("/downloads/" ~ dl.id ~ "/retry-download", "arrow-repeat", "Retry", cls="bc-btn-sm-primary", title="Send the same NZB to NZBGet again") }}{% endif %}
+        {% if dl.search_term %}{{ panel_button("/downloads/" ~ dl.id ~ "/alternatives", "search", "Other NZB", cls="bc-btn-outline btn-sm", title="Search for a different NZB") }}{% endif %}
       {% elif dl.m4b_status == "queued" %}
-      <button
-        class="btn bc-btn-sm-danger"
-        hx-post="/downloads/{{ dl.id }}/reset-conversion"
-        hx-target="closest tr"
-        hx-swap="outerHTML"
-        hx-confirm="Remove this conversion from the queue?"
-        title="Remove from queue"
-      >
-        <i class="bi bi-x-circle me-1"></i>Dequeue
-      </button>
+        {{ row_button("/downloads/" ~ dl.id ~ "/reset-conversion", "x-circle", "Dequeue", confirm="Remove this conversion from the queue?", title="Remove from queue") }}
       {% elif dl.m4b_status == "converting" %}
-      <button
-        class="btn bc-btn-sm-danger"
-        hx-post="/downloads/{{ dl.id }}/reset-conversion"
-        hx-target="closest tr"
-        hx-swap="outerHTML"
-        hx-confirm="Reset the stuck conversion status? Any running conversion will be abandoned."
-        title="Reset stuck conversion"
-      >
-        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
-      </button>
-      <button
-        class="btn bc-btn-sm-primary"
-        hx-get="/downloads/{{ dl.id }}/convert"
-        hx-target="#convert-panel"
-        hx-swap="innerHTML"
-        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
-        title="Open convert form"
-      >
-        <i class="bi bi-file-earmark-music me-1"></i>Convert
-      </button>
-      {% elif dl.m4b_status in ("m4b_failed", "move_failed") %}
-      <button
-        class="btn bc-btn-sm-primary"
-        hx-get="/downloads/{{ dl.id }}/convert"
-        hx-target="#convert-panel"
-        hx-swap="innerHTML"
-        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
-      >
-        <i class="bi bi-arrow-repeat me-1"></i>Retry
-      </button>
-      <button
-        class="btn bc-btn-outline btn-sm"
-        hx-get="/downloads/{{ dl.id }}/conversion-log"
-        hx-target="#convert-panel"
-        hx-swap="innerHTML"
-        onclick="document.getElementById('convert-panel').scrollIntoView({behavior:'smooth',block:'start'})"
-      >
-        <i class="bi bi-terminal me-1"></i>Log
-      </button>
+        {{ row_button("/downloads/" ~ dl.id ~ "/reset-conversion", "stop-circle", "Stop", confirm="Stop this conversion?", title="Stop the running conversion") }}
+      {% elif dl.status == "downloaded" and dl.m4b_status in (none, "m4b_failed", "move_failed") %}
+        {{ panel_button("/downloads/" ~ dl.id ~ "/convert", "arrow-repeat" if dl.m4b_status else "file-earmark-music", "Retry" if dl.m4b_status else "Convert") }}
+        {% if dl.m4b_status %}{{ panel_button("/downloads/" ~ dl.id ~ "/conversion-log", "terminal", "Log", cls="bc-btn-outline btn-sm") }}{% endif %}
+      {% elif dl.m4b_status == "converted" and dl.abs_status in ("not_found", "failed") %}
+        {{ row_button("/downloads/" ~ dl.id ~ "/reimport", "collection-play", "Re-import", cls="bc-btn-sm-primary", title="Ask Audiobookshelf to pick it up again") }}
       {% endif %}
       <button
         class="btn btn-sm"
@@ -164,7 +140,7 @@
         hx-delete="/downloads/{{ dl.id }}"
         hx-target="closest tr"
         hx-swap="outerHTML"
-        hx-confirm="Remove this record from history?"
+        hx-confirm="Remove this record from history? (Files are not deleted.)"
       >
         <i class="bi bi-trash3"></i>
       </button>
@@ -173,5 +149,5 @@
 </tr>
 {% endfor %}
 {% else %}
-<tr><td colspan="6" class="text-center text-muted py-4">No downloads yet.</td></tr>
+<tr><td colspan="6" class="text-center text-muted py-4">Nothing here.</td></tr>
 {% endif %}

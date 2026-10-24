@@ -12,6 +12,17 @@
     {% endif %}
   </div>
   <div class="bc-card-body p-0">
+    {% if duplicates %}
+    <div class="alert alert-warning m-3 mb-0">
+      <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>You may already have this book:</strong>
+      <ul class="mb-0 mt-1">
+        {% for reason in duplicates %}<li>{{ reason }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% for note in notes or [] %}
+    <div class="alert alert-info py-2 m-3 mb-0"><i class="bi bi-info-circle me-2"></i>{{ note }}</div>
+    {% endfor %}
     {% if results %}
     <div class="table-responsive">
       <table class="table bc-table mb-0">
@@ -68,8 +79,10 @@
                 <input type="hidden" name="book_author" value="{{ book_author or '' }}" />
                 <input type="hidden" name="book_series" value="{{ book_series or '' }}" />
                 <input type="hidden" name="book_series_part" value="{{ book_series_part or '' }}" />
+                <input type="hidden" name="book_narrator" value="{{ book_narrator or '' }}" />
+                <input type="hidden" name="replace_id" value="{{ replace_id or '' }}" />
                 <button type="submit" class="btn bc-btn-sm-success">
-                  <i class="bi bi-send-fill me-1"></i>Send to NZBGet
+                  <i class="bi bi-send-fill me-1"></i>{{ "Use this NZB" if replace_id else "Send to NZBGet" }}
                 </button>
               </form>
             </td>
@@ -78,8 +91,6 @@
         </tbody>
       </table>
     </div>
-    <!-- Status area for download feedback -->
-    <div id="download-status" class="p-3"></div>
     {% else %}
     <div class="bc-empty-state">
       <i class="bi bi-cloud-slash fs-2 text-muted mb-3 d-block"></i>
@@ -89,5 +100,7 @@
       </p>
     </div>
     {% endif %}
+    <!-- Status area for download feedback -->
+    <div id="download-status" class="p-3"></div>
   </div>
 </div>

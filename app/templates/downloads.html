@@ -16,7 +16,7 @@
         <!-- Filter buttons -->
         <div class="d-flex align-items-center gap-2 flex-wrap">
           <span class="text-muted small me-1">Show:</span>
-          <button class="btn btn-sm dl-filter-btn active-filter" data-filter="active" onclick="setDlFilter('active')">Active</button>
+          <button class="btn btn-sm dl-filter-btn active-filter" data-filter="active" onclick="setDlFilter('active')" title="In progress, failed, or waiting for you">Active</button>
           <button class="btn btn-sm dl-filter-btn" data-filter="all" onclick="setDlFilter('all')">All</button>
         </div>
         <!-- Limit selector -->
@@ -62,12 +62,6 @@
             </tbody>
           </table>
         </div>
-        {% if not downloads %}
-        <div class="bc-empty-state">
-          <i class="bi bi-inbox fs-1 text-muted mb-3 d-block"></i>
-          <p class="text-muted mb-0">No downloads yet. <a href="/" class="text-accent">Search for an audiobook</a> to get started.</p>
-        </div>
-        {% endif %}
       </div>
     </div>
   </div>

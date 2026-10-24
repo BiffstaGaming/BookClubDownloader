@@ -1,6 +1,7 @@
 import re
 import hashlib
 import logging
+import threading
 from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
@@ -14,6 +15,7 @@ class AbookScraper:
         self.username = username
         self.password = password
         self._logged_in = False
+        self.lock = threading.Lock()
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": (
@@ -122,11 +124,26 @@ class AbookScraper:
         if not self._logged_in:
             self.login()
 
+    @staticmethod
+    def _looks_logged_out(html: str) -> bool:
+        return "action=logout" not in html and "action=login2" in html
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """GET/POST as the logged-in user, logging in again once if the session expired."""
+        self.ensure_logged_in()
+        response = self.session.request(method, url, **kwargs)
+        if self._looks_logged_out(response.text):
+            logger.info("AbookScraper: forum session expired — logging in again")
+            self._logged_in = False
+            if self.login():
+                response = self.session.request(method, url, **kwargs)
+        return response
+
     def search(self, query: str) -> list[dict]:
         """Search the forum and return a deduplicated list of topic dicts."""
-        self.ensure_logged_in()
         try:
-            response = self.session.post(
+            response = self._request(
+                "POST",
                 f"{self.base_url}?action=search2",
                 data={
                     "search": query,
@@ -179,10 +196,9 @@ class AbookScraper:
 
     def get_topic(self, topic_id: str) -> dict:
         """Fetch a topic page and return topic metadata with a list of posts."""
-        self.ensure_logged_in()
         try:
             topic_url = f"{self.base_url}?topic={topic_id}"
-            response = self.session.get(topic_url, timeout=30, allow_redirects=True)
+            response = self._request("GET", topic_url, timeout=30, allow_redirects=True)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "lxml")
 
@@ -250,12 +266,11 @@ class AbookScraper:
         Thank a post (refresh=1 redirects back to topic with content revealed).
         Parse the unhiddenbox directly from the redirect response.
         """
-        self.ensure_logged_in()
         try:
             full_thank_url = thank_href if thank_href.startswith("http") else urljoin(self.base_url + "/", thank_href)
 
             # refresh=1 means the server redirects back to the topic after thanking
-            response = self.session.get(full_thank_url, timeout=30, allow_redirects=True)
+            response = self._request("GET", full_thank_url, timeout=30, allow_redirects=True)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "lxml")
 
@@ -269,6 +284,9 @@ class AbookScraper:
                 result["raw_text"] = inner.get_text(separator=" ", strip=True)
                 return result
 
+            raw_text = inner.get_text(separator=" ", strip=True)
+            if inner.find("div", class_="hiddenbox"):
+                raw_text = "The post is still hidden after thanking — open it on the forum to check. " + raw_text
             return {"search_term": "", "password": "", "raw_text": raw_text}
         except requests.RequestException as exc:
             logger.error("AbookScraper.thank_and_get_content failed: %s", exc)
@@ -369,3 +387,22 @@ class AbookScraper:
             "series_part": series_part,
             "narrator":    narrator,
         }
+
+
+_cache_lock = threading.Lock()
+_cached: dict[tuple, "AbookScraper"] = {}
+
+
+def get_scraper(base_url: str, username: str, password: str) -> "AbookScraper":
+    """
+    Reuse one logged-in scraper per set of credentials so every search or topic
+    view doesn't start with a fresh login. Callers hold `scraper.lock` while using it.
+    """
+    key = (base_url, username, password)
+    with _cache_lock:
+        scraper = _cached.get(key)
+        if scraper is None:
+            _cached.clear()  # credentials changed — drop the old session
+            scraper = AbookScraper(base_url, username, password)
+            _cached[key] = scraper
+        return scraper

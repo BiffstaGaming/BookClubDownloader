@@ -1,233 +1,128 @@
 import logging
+import os
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from markupsafe import escape
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Setting
 from app.scrapers.abook import AbookScraper
-from app.services.nzbget import NzbgetClient
+from app.services import library, notify
 from app.services.abs import AbsClient
+from app.services.nzbget import NzbgetClient
+from app.settings_store import (  # noqa: F401 — get_setting/set_setting re-exported for older imports
+    AUDIBLE_PROVIDERS, BOOL_KEYS, SECRET_KEYS, SETTING_KEYS, all_settings, get_setting, set_setting,
+)
+from app.ui import alert
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
-SETTING_KEYS = [
-    "abook_url",
-    "abook_username",
-    "abook_password",
-    "nzbget_url",
-    "nzbget_username",
-    "nzbget_password",
-    "nzbget_category",
-    "nzbget_path_prefix",
-    "local_path_prefix",
-    "m4b_output_path",
-    "m4b_move_template",
-    "m4b_jobs",
-    "m4b_bitrate",
-    "abs_url",
-    "abs_token",
-    "abs_library_id",
-]
 
-
-def get_setting(db: Session, key: str, default: str = "") -> str:
-    row = db.query(Setting).filter(Setting.key == key).first()
-    return row.value if row and row.value is not None else default
-
-
-def set_setting(db: Session, key: str, value: str):
-    row = db.query(Setting).filter(Setting.key == key).first()
-    if row:
-        row.value = value
-    else:
-        db.add(Setting(key=key, value=value))
-    db.commit()
-
-
-@router.get("", response_class=HTMLResponse)
-async def settings_page(request: Request, db: Session = Depends(get_db)):
-    current = {key: get_setting(db, key) for key in SETTING_KEYS}
-    # Provide a sensible default for abook_url if not set
-    if not current.get("abook_url"):
-        current["abook_url"] = "https://abook.link/book/index.php"
-    return templates.TemplateResponse(
-        "settings.html",
-        {"request": request, "settings": current, "message": None, "message_type": None},
-    )
-
-
-@router.post("", response_class=HTMLResponse)
-async def save_settings(
-    request: Request,
-    db: Session = Depends(get_db),
-    abook_url: str = Form(default=""),
-    abook_username: str = Form(default=""),
-    abook_password: str = Form(default=""),
-    nzbget_url: str = Form(default=""),
-    nzbget_username: str = Form(default=""),
-    nzbget_password: str = Form(default=""),
-    nzbget_category: str = Form(default=""),
-    nzbget_path_prefix: str = Form(default=""),
-    local_path_prefix: str = Form(default=""),
-    m4b_output_path: str = Form(default=""),
-    m4b_move_template: str = Form(default=""),
-    m4b_jobs: str = Form(default=""),
-    m4b_bitrate: str = Form(default=""),
-    abs_url: str = Form(default=""),
-    abs_token: str = Form(default=""),
-    abs_library_id: str = Form(default=""),
-):
-    values = {
-        "abook_url": abook_url,
-        "abook_username": abook_username,
-        "abook_password": abook_password,
-        "nzbget_url": nzbget_url,
-        "nzbget_username": nzbget_username,
-        "nzbget_password": nzbget_password,
-        "nzbget_category": nzbget_category,
-        "nzbget_path_prefix": nzbget_path_prefix,
-        "local_path_prefix": local_path_prefix,
-        "m4b_output_path": m4b_output_path,
-        "m4b_move_template": m4b_move_template,
-        "m4b_jobs": m4b_jobs,
-        "m4b_bitrate": m4b_bitrate,
-        "abs_url": abs_url,
-        "abs_token": abs_token,
-        "abs_library_id": abs_library_id,
-    }
-    for key, value in values.items():
-        set_setting(db, key, value)
-
-    logger.info("Settings saved successfully")
-    current = {key: get_setting(db, key) for key in SETTING_KEYS}
+def _render(request: Request, db: Session, message: str = None, message_type: str = None):
+    current = all_settings(db)
+    secret_set = {key: bool(current.get(key)) for key in SECRET_KEYS}
+    for key in SECRET_KEYS:
+        current[key] = ""  # never send saved secrets back to the browser
     return templates.TemplateResponse(
         "settings.html",
         {
             "request": request,
             "settings": current,
-            "message": "Settings saved successfully.",
-            "message_type": "success",
+            "secret_set": secret_set,
+            "audible_providers": AUDIBLE_PROVIDERS,
+            "message": message,
+            "message_type": message_type,
         },
     )
 
 
+@router.get("", response_class=HTMLResponse)
+def settings_page(request: Request, db: Session = Depends(get_db)):
+    return _render(request, db)
+
+
+@router.post("", response_class=HTMLResponse)
+async def save_settings(request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    for key in SETTING_KEYS:
+        if key in BOOL_KEYS:
+            set_setting(db, key, "1" if form.get(key) else "0")
+            continue
+        if key not in form:
+            continue  # e.g. abs_library_id before libraries were fetched
+        value = str(form.get(key, "")).strip()
+        if key in SECRET_KEYS and not value:
+            continue  # blank secret field = keep the saved value
+        set_setting(db, key, value)
+
+    logger.info("Settings saved")
+    return _render(request, db, "Settings saved successfully.", "success")
+
+
 @router.post("/test-nzbget", response_class=HTMLResponse)
-async def test_nzbget(
-    request: Request,
+def test_nzbget(
     nzbget_url: str = Form(default=""),
     nzbget_username: str = Form(default=""),
     nzbget_password: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    # Use form values if provided, fall back to DB
+    nzbget_url = nzbget_url or get_setting(db, "nzbget_url")
+    nzbget_username = nzbget_username or get_setting(db, "nzbget_username")
+    nzbget_password = nzbget_password or get_setting(db, "nzbget_password")
     if not nzbget_url:
-        nzbget_url = get_setting(db, "nzbget_url")
-    if not nzbget_username:
-        nzbget_username = get_setting(db, "nzbget_username")
-    if not nzbget_password:
-        nzbget_password = get_setting(db, "nzbget_password")
-
-    if not nzbget_url:
-        return HTMLResponse(
-            '<div class="alert alert-warning mb-0">NZBGet URL is not configured.</div>'
-        )
-
+        return alert("warning", "NZBGet URL is not configured.", classes="mb-0")
     try:
-        client = NzbgetClient(nzbget_url, nzbget_username, nzbget_password)
-        success = client.test_connection()
-        if success:
-            return HTMLResponse(
-                '<div class="alert alert-success mb-0">'
-                '<i class="bi bi-check-circle-fill me-2"></i>Connection successful!</div>'
-            )
-        else:
-            return HTMLResponse(
-                '<div class="alert alert-danger mb-0">'
-                '<i class="bi bi-x-circle-fill me-2"></i>Connection failed. '
-                "Check your NZBGet URL and credentials.</div>"
-            )
+        if NzbgetClient(nzbget_url, nzbget_username, nzbget_password).test_connection():
+            return alert("success", "Connection successful!", classes="mb-0")
+        return alert("danger", "Connection failed. Check your NZBGet URL and credentials.", classes="mb-0")
     except Exception as exc:
         logger.error("NZBGet connection test error: %s", exc)
-        return HTMLResponse(
-            f'<div class="alert alert-danger mb-0">'
-            f'<i class="bi bi-x-circle-fill me-2"></i>Error: {exc}</div>'
-        )
+        return alert("danger", f"Error: {exc}", classes="mb-0")
 
 
 @router.post("/test-abook", response_class=HTMLResponse)
-async def test_abook(
-    request: Request,
+def test_abook(
     abook_url: str = Form(default=""),
     abook_username: str = Form(default=""),
     abook_password: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    if not abook_url:
-        abook_url = get_setting(db, "abook_url")
-    if not abook_username:
-        abook_username = get_setting(db, "abook_username")
-    if not abook_password:
-        abook_password = get_setting(db, "abook_password")
-
+    abook_url = abook_url or get_setting(db, "abook_url")
+    abook_username = abook_username or get_setting(db, "abook_username")
+    abook_password = abook_password or get_setting(db, "abook_password")
     if not abook_url or not abook_username or not abook_password:
-        return HTMLResponse(
-            '<div class="alert alert-warning mb-0">abook.link URL, username and password are all required.</div>'
-        )
-
+        return alert("warning", "abook.link URL, username and password are all required.", classes="mb-0")
     try:
-        scraper = AbookScraper(abook_url, abook_username, abook_password)
-        success = scraper.login()
-        if success:
-            return HTMLResponse(
-                '<div class="alert alert-success mb-0">'
-                '<i class="bi bi-check-circle-fill me-2"></i>Login successful!</div>'
-            )
-        else:
-            return HTMLResponse(
-                '<div class="alert alert-danger mb-0">'
-                '<i class="bi bi-x-circle-fill me-2"></i>Login failed. '
-                "Check your username and password.</div>"
-            )
+        if AbookScraper(abook_url, abook_username, abook_password).login():
+            return alert("success", "Login successful!", classes="mb-0")
+        return alert("danger", "Login failed. Check your username and password.", classes="mb-0")
     except Exception as exc:
         logger.error("abook.link login test error: %s", exc)
-        return HTMLResponse(
-            f'<div class="alert alert-danger mb-0">'
-            f'<i class="bi bi-x-circle-fill me-2"></i>Error: {exc}</div>'
-        )
+        return alert("danger", f"Error: {exc}", classes="mb-0")
 
 
 @router.post("/abs-libraries", response_class=HTMLResponse)
-async def fetch_abs_libraries(
-    request: Request,
+def fetch_abs_libraries(
     abs_url: str = Form(default=""),
     abs_token: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    if not abs_url:
-        abs_url = get_setting(db, "abs_url")
-    if not abs_token:
-        abs_token = get_setting(db, "abs_token")
-
+    abs_url = abs_url or get_setting(db, "abs_url")
+    abs_token = abs_token or get_setting(db, "abs_token")
     if not abs_url or not abs_token:
-        return HTMLResponse(
-            '<div class="alert alert-warning mb-0">ABS URL and API token are required.</div>'
-        )
-
+        return alert("warning", "ABS URL and API key are required.", classes="mb-0")
     try:
-        client = AbsClient(abs_url, abs_token)
-        libraries = client.get_libraries()
+        libraries = AbsClient(abs_url, abs_token).get_libraries()
         if not libraries:
-            return HTMLResponse(
-                '<div class="alert alert-warning mb-0">No libraries found.</div>'
-            )
+            return alert("warning", "No libraries found.", classes="mb-0")
         current = get_setting(db, "abs_library_id")
         options = "".join(
-            f'<option value="{lib["id"]}" {"selected" if lib["id"] == current else ""}>'
-            f'{lib["name"]}</option>'
+            f'<option value="{escape(lib["id"])}" {"selected" if lib["id"] == current else ""}>'
+            f'{escape(lib["name"])} ({escape(lib.get("mediaType", "book"))})</option>'
             for lib in libraries
         )
         return HTMLResponse(
@@ -239,7 +134,63 @@ async def fetch_abs_libraries(
         )
     except Exception as exc:
         logger.error("ABS library fetch error: %s", exc)
-        return HTMLResponse(
-            f'<div class="alert alert-danger mb-0">'
-            f'<i class="bi bi-x-circle-fill me-2"></i>Error: {exc}</div>'
-        )
+        return alert("danger", f"Error: {exc}", classes="mb-0")
+
+
+@router.post("/preview-template", response_class=HTMLResponse)
+def preview_template(m4b_move_template: str = Form(default=""), m4b_output_path: str = Form(default="")):
+    sample_series = {"title": "The Way of Kings", "author": "Brandon Sanderson", "series": "The Stormlight Archive",
+                     "series_part": "1", "narrator": "Michael Kramer", "year": "2010"}
+    sample_single = {"title": "Project Hail Mary", "author": "Andy Weir", "narrator": "Ray Porter", "year": "2021"}
+    output = m4b_output_path or "/m4b"
+    rows = "".join(
+        f'<div><code class="bc-code">{escape(library.final_book_path(output, m4b_move_template, meta))}</code></div>'
+        for meta in (sample_series, sample_single)
+    )
+    warning = library.template_layout_warning(m4b_move_template)
+    warn_html = (f'<div class="text-warning small mt-1"><i class="bi bi-exclamation-triangle me-1"></i>'
+                 f'{escape(warning)}</div>') if warning else ""
+    return HTMLResponse(f'<div class="small text-muted">Example result:</div>{rows}{warn_html}')
+
+
+@router.post("/check-paths", response_class=HTMLResponse)
+def check_paths(
+    local_path_prefix: str = Form(default=""),
+    nzbget_path_prefix: str = Form(default=""),
+    m4b_output_path: str = Form(default=""),
+    m4b_move_template: str = Form(default=""),
+):
+    checks = []
+    downloads = local_path_prefix or nzbget_path_prefix
+    if downloads:
+        checks.append(("Downloads folder", downloads, False))
+    checks.append(("M4B output / working folder", m4b_output_path or "/m4b", True))
+    template = m4b_move_template.strip()
+    if template.startswith("/"):
+        fixed = template.split("[", 1)[0].rstrip("/") or "/"
+        checks.append(("Library root (from template)", fixed, True))
+
+    rows = []
+    for label, path, need_write in checks:
+        if not os.path.isdir(path):
+            state, cls = "does not exist inside the container — check your volume mounts", "text-danger"
+        elif need_write and not os.access(path, os.W_OK):
+            state, cls = "exists but is not writable — check PUID/PGID and folder permissions", "text-danger"
+        else:
+            state, cls = "OK", "text-success"
+        rows.append(f'<div class="small"><strong>{escape(label)}</strong> <code class="bc-code">{escape(path)}</code> '
+                    f'<span class="{cls}">{escape(state)}</span></div>')
+    return HTMLResponse("".join(rows))
+
+
+@router.post("/test-ha", response_class=HTMLResponse)
+def test_ha(ha_webhook_url: str = Form(default=""), db: Session = Depends(get_db)):
+    url = ha_webhook_url or get_setting(db, "ha_webhook_url")
+    if not url:
+        return alert("warning", "Enter the Home Assistant webhook URL first.", classes="mb-0")
+    try:
+        notify.post_webhook(url, notify.build_payload(
+            "test", title="BookClub test", message="If you can see this, BookClub can reach Home Assistant."))
+        return alert("success", "Sent — check your Home Assistant automation's trace.", classes="mb-0")
+    except Exception as exc:
+        return alert("danger", f"Webhook failed: {exc}", classes="mb-0")

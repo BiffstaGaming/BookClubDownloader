@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 {% block title %}BookClub — Settings{% endblock %}
 
+{% macro secret_input(key, label, placeholder="", autocomplete="off") %}
+  <label for="{{ key }}" class="form-label bc-label">{{ label }}</label>
+  <input
+    type="password"
+    class="form-control bc-input"
+    id="{{ key }}"
+    name="{{ key }}"
+    value=""
+    placeholder="{{ '•••••••• saved — leave blank to keep' if secret_set.get(key) else placeholder }}"
+    autocomplete="{{ autocomplete }}"
+  />
+{% endmacro %}
+
 {% block content %}
 <div class="row g-4 justify-content-center">
   <div class="col-12 col-xl-9">
@@ -39,7 +52,7 @@
               class="form-control bc-input"
               id="abook_url"
               name="abook_url"
-              value="{{ settings.get('abook_url', 'https://abook.link/book/index.php') }}"
+              value="{{ settings.get('abook_url') }}"
               placeholder="https://abook.link/book/index.php"
             />
             <div class="form-text text-muted">
@@ -59,15 +72,7 @@
               />
             </div>
             <div class="col-sm-6">
-              <label for="abook_password" class="form-label bc-label">Password</label>
-              <input
-                type="password"
-                class="form-control bc-input"
-                id="abook_password"
-                name="abook_password"
-                value="{{ settings.get('abook_password', '') }}"
-                autocomplete="current-password"
-              />
+              {{ secret_input("abook_password", "Password", autocomplete="current-password") }}
             </div>
           </div>
           <!-- abook.link connection test -->
@@ -123,15 +128,7 @@
               />
             </div>
             <div class="col-sm-6">
-              <label for="nzbget_password" class="form-label bc-label">Password</label>
-              <input
-                type="password"
-                class="form-control bc-input"
-                id="nzbget_password"
-                name="nzbget_password"
-                value="{{ settings.get('nzbget_password', '') }}"
-                autocomplete="current-password"
-              />
+              {{ secret_input("nzbget_password", "Password", autocomplete="current-password") }}
             </div>
           </div>
           <div class="mb-3">
@@ -172,7 +169,7 @@
       <div class="bc-card mb-4">
         <div class="bc-card-header d-flex align-items-center gap-2">
           <i class="bi bi-file-earmark-music-fill text-accent"></i>
-          <span>M4B Conversion Paths</span>
+          <span>Paths &amp; Conversion</span>
         </div>
         <div class="bc-card-body">
           <p class="text-muted small mb-3">
@@ -216,8 +213,45 @@
               value="{{ settings.get('m4b_output_path', '') }}"
               placeholder="/m4b"
             />
-            <div class="form-text text-muted">Working directory where m4b-tool writes the file during conversion.</div>
+            <div class="form-text text-muted">
+              m4b-tool works in a hidden <code>.bookclub-work</code> folder here. When no library template is set
+              below, finished books are also filed here as <code>Author/Series/1 - Title/Title.m4b</code>.
+            </div>
           </div>
+
+          <div class="mb-3">
+            <label for="m4b_move_template" class="form-label bc-label">Library Location Template</label>
+            <input
+              type="text"
+              class="form-control bc-input"
+              id="m4b_move_template"
+              name="m4b_move_template"
+              value="{{ settings.get('m4b_move_template', '') }}"
+              placeholder="/audiobooks/[Author]/[Series]/[BookNumber] - [Title]/[Title].m4b"
+              hx-post="/settings/preview-template"
+              hx-trigger="load, input changed delay:400ms"
+              hx-target="#template-preview"
+              hx-include="[name='m4b_output_path']"
+            />
+            <div class="form-text text-muted">
+              Where finished books go. Variables:
+              <code>[Author]</code> <code>[Title]</code> <code>[Series]</code> <code>[BookNumber]</code>
+              <code>[Narrator]</code> <code>[Year]</code> <code>[Filename]</code>.
+              Empty parts (e.g. <code>[Series]</code> for a standalone book) are dropped. Audiobookshelf needs each
+              book in its own folder.
+            </div>
+            <div id="template-preview" class="mt-2"></div>
+          </div>
+
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="delete_source" name="delete_source" value="1"
+                   {% if settings.get('delete_source') == '1' %}checked{% endif %} />
+            <label class="form-check-label" for="delete_source">Delete the downloaded files after a successful conversion</label>
+            <div class="form-text text-muted">
+              Only folders inside the downloads path above are ever deleted.
+            </div>
+          </div>
+
           <div class="row g-3 mb-3">
             <div class="col-sm-6">
               <label for="m4b_jobs" class="form-label bc-label">Parallel Jobs</label>
@@ -236,8 +270,7 @@
                 Most audiobooks have 10&ndash;30 chapters, so setting this above that count
                 gives no extra benefit. A good starting point is <strong>half your CPU core
                 count</strong> — e.g. <code>16</code> on a 32-core machine — to leave headroom
-                for other services. Setting it equal to or above your chapter count will
-                encode the entire book at once. Default: <code>1</code> (single-threaded).
+                for other services. Default: <code>1</code> (single-threaded).
               </div>
             </div>
             <div class="col-sm-6">
@@ -258,27 +291,22 @@
                 </optgroup>
               </select>
               <div class="form-text text-muted">
-                Lower bitrate = faster encoding + smaller file. For audiobooks, <code>64k</code>
-                is indistinguishable from 128k for speech and encodes roughly twice as fast.
+                For speech, <code>64k</code> sounds the same as 128k and encodes roughly twice as fast.
               </div>
             </div>
           </div>
 
-          <div class="mb-0">
-            <label for="m4b_move_template" class="form-label bc-label">Move After Conversion (optional)</label>
-            <input
-              type="text"
-              class="form-control bc-input"
-              id="m4b_move_template"
-              name="m4b_move_template"
-              value="{{ settings.get('m4b_move_template', '') }}"
-              placeholder="/audiobooks/[Author]/[Filename]"
-            />
-            <div class="form-text text-muted">
-              If set, the .m4b will be moved here after conversion. Available variables:
-              <code>[Author]</code> <code>[Title]</code> <code>[Series]</code> <code>[BookNumber]</code> <code>[Filename]</code>
-              &mdash; e.g. <code>/audiobooks/[Author]/[Series]/[Filename]</code>
-            </div>
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              class="btn bc-btn-outline"
+              hx-post="/settings/check-paths"
+              hx-target="#path-check-result"
+              hx-include="[name='local_path_prefix'],[name='nzbget_path_prefix'],[name='m4b_output_path'],[name='m4b_move_template']"
+            >
+              <i class="bi bi-folder-check me-1"></i>Check Folders
+            </button>
+            <div id="path-check-result" class="flex-grow-1"></div>
           </div>
         </div>
       </div>
@@ -287,12 +315,12 @@
       <div class="bc-card mb-4">
         <div class="bc-card-header d-flex align-items-center gap-2">
           <i class="bi bi-collection-play-fill text-accent"></i>
-          <span>Audiobookshelf Integration</span>
+          <span>Audiobookshelf &amp; Matching</span>
         </div>
         <div class="bc-card-body">
           <p class="text-muted small mb-3">
-            After conversion, BookClub will scan your ABS library and trigger a Quick Match
-            to automatically import cover art and any missing metadata.
+            BookClub looks books up on Audible through Audiobookshelf, writes a <code>metadata.json</code> next to
+            each book, asks ABS to scan just the new folder, then runs Quick Match.
           </p>
           <div class="mb-3">
             <label for="abs_url" class="form-label bc-label">Audiobookshelf URL</label>
@@ -306,18 +334,10 @@
             />
           </div>
           <div class="mb-3">
-            <label for="abs_token" class="form-label bc-label">API Token</label>
-            <input
-              type="password"
-              class="form-control bc-input"
-              id="abs_token"
-              name="abs_token"
-              value="{{ settings.get('abs_token', '') }}"
-              placeholder="Your ABS API token"
-              autocomplete="off"
-            />
+            {{ secret_input("abs_token", "API Key", placeholder="Your ABS API key") }}
             <div class="form-text text-muted">
-              Found in Audiobookshelf under <strong>Settings → Users → [your user] → API Token</strong>.
+              Create one in Audiobookshelf under <strong>Settings → API Keys</strong> (ABS 2.26+) for an admin user.
+              Older user tokens still work but are deprecated by ABS.
             </div>
           </div>
           <div class="mb-3">
@@ -336,7 +356,7 @@
             </div>
             <div id="abs-library-result" class="mt-2"></div>
           </div>
-          <div class="d-flex align-items-center gap-3 flex-wrap">
+          <div class="d-flex align-items-center gap-3 flex-wrap mb-4">
             <button
               type="button"
               class="btn bc-btn-outline"
@@ -349,6 +369,111 @@
               <span class="spinner-border spinner-border-sm abs-spinner htmx-indicator me-1" role="status"></span>
               <i class="bi bi-arrow-repeat me-1"></i>Fetch Libraries
             </button>
+          </div>
+
+          <p class="text-muted small mb-2">
+            If Audiobookshelf runs in another container and sees the library under a different path, map it here.
+          </p>
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              <label for="abs_path_local" class="form-label bc-label">Library path in BookClub</label>
+              <input type="text" class="form-control bc-input" id="abs_path_local" name="abs_path_local"
+                     value="{{ settings.get('abs_path_local', '') }}" placeholder="/Media/Audiobooks" />
+            </div>
+            <div class="col-sm-6">
+              <label for="abs_path_remote" class="form-label bc-label">Same path in Audiobookshelf</label>
+              <input type="text" class="form-control bc-input" id="abs_path_remote" name="abs_path_remote"
+                     value="{{ settings.get('abs_path_remote', '') }}" placeholder="/audiobooks" />
+            </div>
+          </div>
+
+          <div class="row g-3">
+            <div class="col-sm-4">
+              <label for="audible_provider" class="form-label bc-label">Audible Region</label>
+              <select class="form-select bc-input" id="audible_provider" name="audible_provider">
+                {% for value, label in audible_providers %}
+                <option value="{{ value }}" {% if settings.get('audible_provider') == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-sm-4">
+              <label for="auto_match_threshold" class="form-label bc-label">Auto-convert confidence</label>
+              <div class="input-group">
+                <input type="number" class="form-control bc-input" id="auto_match_threshold" name="auto_match_threshold"
+                       value="{{ settings.get('auto_match_threshold') }}" min="50" max="100" />
+                <span class="input-group-text bc-input-addon">%</span>
+              </div>
+            </div>
+            <div class="col-sm-4 d-flex align-items-end">
+              <div class="form-check form-switch mb-2">
+                <input class="form-check-input" type="checkbox" role="switch" id="auto_convert" name="auto_convert" value="1"
+                       {% if settings.get('auto_convert') == '1' %}checked{% endif %} />
+                <label class="form-check-label" for="auto_convert">Convert automatically</label>
+              </div>
+            </div>
+          </div>
+          <div class="form-text text-muted">
+            When a download finishes, the best Audible match at or above this confidence is converted without asking.
+            Anything lower waits on the Downloads page for you to pick the right match.
+          </div>
+        </div>
+      </div>
+
+      <!-- Home Assistant Section -->
+      <div class="bc-card mb-4">
+        <div class="bc-card-header d-flex align-items-center gap-2">
+          <i class="bi bi-house-gear-fill text-accent"></i>
+          <span>Home Assistant</span>
+        </div>
+        <div class="bc-card-body">
+          <div class="mb-3">
+            <label for="ha_webhook_url" class="form-label bc-label">Webhook URL</label>
+            <input type="url" class="form-control bc-input" id="ha_webhook_url" name="ha_webhook_url"
+                   value="{{ settings.get('ha_webhook_url', '') }}"
+                   placeholder="http://homeassistant.local:8123/api/webhook/bookclub-xxxxxxxx" />
+            <div class="form-text text-muted">
+              BookClub POSTs an event here when a book is imported, a download or conversion fails, or a book needs a
+              manual match. Create an automation with a <strong>Webhook</strong> trigger in Home Assistant and paste its
+              URL. For sensors, Home Assistant can poll <code>/api/status</code> on this server
+              (<a href="/api/status" target="_blank" class="text-accent">view</a>).
+            </div>
+          </div>
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <button type="button" class="btn bc-btn-outline" hx-post="/settings/test-ha" hx-target="#ha-test-result"
+                    hx-include="[name='ha_webhook_url']">
+              <i class="bi bi-send me-1"></i>Send Test Event
+            </button>
+            <div id="ha-test-result" class="flex-grow-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Maintenance Section -->
+      <div class="bc-card mb-4">
+        <div class="bc-card-header d-flex align-items-center gap-2">
+          <i class="bi bi-sliders text-accent"></i>
+          <span>Background Processing</span>
+        </div>
+        <div class="bc-card-body">
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <label for="poll_interval" class="form-label bc-label">Check NZBGet every</label>
+              <div class="input-group">
+                <input type="number" class="form-control bc-input" id="poll_interval" name="poll_interval"
+                       value="{{ settings.get('poll_interval') }}" min="5" max="600" />
+                <span class="input-group-text bc-input-addon">seconds</span>
+              </div>
+              <div class="form-text text-muted">Runs in the background — no browser tab needs to be open.</div>
+            </div>
+            <div class="col-sm-6">
+              <label for="log_retention_days" class="form-label bc-label">Keep logs for</label>
+              <div class="input-group">
+                <input type="number" class="form-control bc-input" id="log_retention_days" name="log_retention_days"
+                       value="{{ settings.get('log_retention_days') }}" min="0" max="3650" />
+                <span class="input-group-text bc-input-addon">days</span>
+              </div>
+              <div class="form-text text-muted"><code>0</code> keeps logs forever.</div>
+            </div>
           </div>
         </div>
       </div>

@@ -1,698 +1,82 @@
-import asyncio
-import difflib
 import json
 import logging
-import os
-import re
-import shutil
-import unicodedata
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
-from fastapi.responses import HTMLResponse, Response
+
+from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import and_, or_
+from markupsafe import escape
+from sqlalchemy import and_, func, not_
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal, get_db
-from app.models import Download
-from app.scrapers.nzbking import NzbkingScraper
-from app.scrapers.binsearch import BinsearchScraper
-from app.services.nzbget import NzbgetClient
-from app.routers.settings import get_setting
+from app.database import get_db
 from app.log_handler import log_to_db
+from app.models import Download
+from app.services import library
 from app.services.abs import AbsClient
+from app.services.matching import parse_nzb_name, rank_candidates
+from app.services.nzb import NzbError, fetch_nzb, search_nzbs, submit_to_nzbget
+from app.services.pipeline import (
+    apply_candidate, check_input_folder, enqueue, find_duplicates, pipeline, queue_positions,
+)
+from app.settings_store import AUDIBLE_PROVIDERS, get_setting
+from app.ui import alert, alert_html, not_configured
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
-
-def _sanitize_filename(name: str) -> str:
-    """Return a Windows-safe filename/folder component with no special characters."""
-    # Replace non-breaking and other unicode spaces with regular space
-    name = name.replace('\xa0', ' ')
-    # Substitute common unicode punctuation with ASCII equivalents before stripping
-    _unicode_map = {
-        '\u2013': '-',   # en dash
-        '\u2014': '-',   # em dash
-        '\u2018': "'",   # left single quote
-        '\u2019': "'",   # right single quote
-        '\u201c': '"',   # left double quote
-        '\u201d': '"',   # right double quote
-        '\u2026': '...',  # ellipsis
-        '\u00b7': '.',   # middle dot
-        '\u00d7': 'x',   # multiplication sign
-    }
-    for src, dst in _unicode_map.items():
-        name = name.replace(src, dst)
-    # Decompose accented characters (e.g. é → e + combining accent) then drop non-ASCII
-    name = unicodedata.normalize('NFKD', name)
-    name = name.encode('ascii', 'ignore').decode('ascii')
-    # Collapse multiple spaces
-    name = re.sub(r' +', ' ', name)
-    # Remove characters Windows forbids in filenames/paths
-    name = re.sub(r'[<>:\"/\\|?*]', '_', name)
-    name = name.strip(". ")
-    return name or "download"
+# Handlers doing network I/O are plain `def` so FastAPI runs them in its thread
+# pool instead of blocking the event loop (and with it the background worker).
 
 
-def _resolve_move_template(template: str, title: str, author: str, series: str, series_part: str, filename: str) -> str:
-    """Substitute [Variable] placeholders in the move path template."""
-    replacements = {
-        "[Author]":     _sanitize_filename(author) if author else "Unknown Author",
-        "[Title]":      _sanitize_filename(title) if title else "Unknown Title",
-        "[Series]":     _sanitize_filename(series) if series else "",
-        "[BookNumber]": series_part or "",
-        "[Filename]":   filename,
-    }
-    result = template
-    for key, value in replacements.items():
-        result = result.replace(key, value)
-    # Clean up any double slashes or trailing separators from empty substitutions
-    result = re.sub(r"[\\/]{2,}", "/", result)
-    result = result.strip("/")
-    return "/" + result
+def _get(db: Session, download_id: int) -> Download | None:
+    return db.query(Download).filter(Download.id == download_id).first()
 
 
-_AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".flac", ".wav", ".ogg", ".aac", ".opus"}
-
-
-def _find_audio_dirs(base_path: str) -> list[str]:
-    """
-    Walk base_path recursively and return every directory that contains at
-    least one audio file, sorted so chapters stay in order.
-    Falls back to [base_path] if nothing is found.
-    """
-    found = []
-    for root, dirs, files in os.walk(base_path):
-        dirs.sort()  # walk in alphabetical order
-        if any(os.path.splitext(f)[1].lower() in _AUDIO_EXTS for f in files):
-            found.append(root)
-    return found or [base_path]
-
-
-def _write_abs_metadata(m4b_path: str, title: str, author: str, series: str, series_part: str) -> str:
-    """
-    Write a metadata.abs file into the same directory as the m4b file.
-    Audiobookshelf reads this on scan and it takes full priority over embedded tags.
-    Returns the path to the written file.
-    """
-    meta = {}
-    if title:
-        meta["title"] = title
-    if author:
-        meta["author"] = author
-    if series:
-        meta["series"] = series
-        if series_part:
-            meta["volumeNumber"] = series_part
-
-    dest_dir = os.path.dirname(m4b_path)
-    meta_path = os.path.join(dest_dir, "metadata.abs")
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2, ensure_ascii=False)
-    return meta_path
-
-
-AUTO_MATCH_THRESHOLD = 90  # confidence % required for automatic conversion
-
-# Only one m4b-tool process runs at a time.  Others wait in order.
-_conversion_semaphore = asyncio.Semaphore(1)
-
-# Latest queued job number per download.  A waiting job whose number is no
-# longer the latest (dequeued, then queued again) is stale and must not run.
-_queue_generation: dict[int, int] = {}
-
-
-def _get_queue_positions(db: Session) -> dict:
-    """Return {download_id: queue_position} for all downloads with m4b_status='queued'."""
-    queued = (
-        db.query(Download)
-        .filter(Download.m4b_status == "queued")
-        .order_by(Download.id)
-        .all()
+def _rows(request: Request, db: Session, downloads: list):
+    return templates.TemplateResponse(
+        "partials/download_rows.html",
+        {
+            "request": request,
+            "downloads": downloads,
+            "queue_positions": queue_positions(db),
+            "abs_url": get_setting(db, "abs_url").rstrip("/"),
+            "running_id": pipeline.current_id,
+        },
     )
-    return {dl.id: i + 1 for i, dl in enumerate(queued)}
 
 
-def _parse_nzb_name(name: str) -> tuple[str, str]:
-    """
-    Parse the forum NZB naming convention:
-      "Book Club - [FLAG] Author - Series## - BookTitle (Narrator/Year)"
-    Returns (title, author).
-    Strips any trailing parenthetical (year OR narrator name).
-    Strips bracketed flags like [SPOT] from the author segment.
-    """
-    # Strip any trailing (...) — covers both "(2025)" and "(Colin Mace)"
-    name = re.sub(r'\s*\([^)]+\)\s*$', '', name).strip()
-    parts = [p.strip() for p in name.split(' - ')]
-    # Need at least "Book Club - Author - Title"
-    if len(parts) >= 3:
-        title  = parts[-1]
-        author = re.sub(r'^\[[^\]]+\]\s*', '', parts[1]).strip()  # strip [SPOT] etc.
-    elif len(parts) == 2:
-        title  = parts[-1]
-        author = ""
-    else:
-        title  = name
-        author = ""
-    return title, author
+def _convert_form(request: Request, db: Session, dl: Download, **extra):
+    saved = dl.parsed_metadata
+    defaults = dict(saved)
+    defaults.setdefault("title", dl.post_title or dl.nzb_name or "")
+    if not saved.get("title"):
+        parsed_title, parsed_author = parse_nzb_name(dl.post_title or dl.nzb_name or "")
+        defaults["title"] = parsed_title or defaults["title"]
+        defaults.setdefault("author", parsed_author)
+    preview = library.final_book_path(get_setting(db, "m4b_output_path"), get_setting(db, "m4b_move_template"), defaults)
+    return templates.TemplateResponse(
+        "partials/convert_form.html",
+        {
+            "request": request,
+            "dl": dl,
+            "saved": defaults,
+            "destination_preview": preview,
+            "input_problem": check_input_folder(saved.get("input_path") or dl.download_path or ""),
+            **extra,
+        },
+    )
 
 
-def _extract_nzb_title(name: str) -> str:
-    return _parse_nzb_name(name)[0]
+def _refresh(response: HTMLResponse) -> HTMLResponse:
+    response.headers["HX-Trigger"] = "refreshDownloads"
+    return response
 
 
-def _extract_nzb_author(name: str) -> str:
-    return _parse_nzb_name(name)[1]
-
-
-def _extract_audible_series(book: dict) -> tuple[str, str]:
-    """Return (series_name, series_part) from an ABS/Audible search result dict."""
-    series_raw = book.get("series")
-    if isinstance(series_raw, list) and series_raw:
-        s = series_raw[0]
-        name = s.get("name") or s.get("series") or ""
-        part = str(s.get("position") or s.get("volumeNumber") or s.get("sequence") or "")
-    elif isinstance(series_raw, str):
-        name = series_raw
-        part = ""
-        for k in ("volumeNumber", "sequence", "position", "seriesSequence"):
-            v = book.get(k)
-            if v:
-                part = str(v)
-                break
-    else:
-        name = ""
-        part = ""
-    return name, part
-
-
-def _compute_confidence(nzb_title: str, nzb_author: str, audible_title: str, audible_author: str) -> int:
-    """
-    Return 0-100 match confidence.
-    Title is the decisive factor — if it scores < 50%, author match cannot save it.
-    Above 50% title similarity, author (35%) is factored in.
-    """
-    def _norm(s: str) -> str:
-        return re.sub(r'[^\w\s]', '', (s or "").lower()).strip()
-
-    def _ratio(a: str, b: str) -> float:
-        a, b = _norm(a), _norm(b)
-        if not a or not b:
-            return 0.0
-        return difflib.SequenceMatcher(None, a, b).ratio()
-
-    title_score = _ratio(nzb_title, audible_title)
-    # If the title doesn't match well enough, don't let author inflate the score
-    if title_score < 0.5:
-        return round(title_score * 100)
-    if nzb_author and audible_author:
-        author_score = _ratio(nzb_author, audible_author)
-        score = title_score * 0.65 + author_score * 0.35
-    else:
-        score = title_score
-    return round(score * 100)
-
-
-def _best_audible_match(results: list, nzb_title: str) -> dict:
-    """
-    From up to 5 Audible results, return the one whose title best matches
-    the extracted NZB title — rather than blindly taking results[0].
-    Audible sometimes returns the most-popular book in a series first even
-    when a different book in that series was searched.
-    """
-    def _title_ratio(book: dict) -> float:
-        a = re.sub(r'[^\w\s]', '', (nzb_title or "").lower()).strip()
-        b = re.sub(r'[^\w\s]', '', (book.get("title") or "").lower()).strip()
-        if not a or not b:
-            return 0.0
-        return difflib.SequenceMatcher(None, a, b).ratio()
-
-    candidates = results[:5]
-    return max(candidates, key=_title_ratio)
-
-
-async def _auto_process_download(download_id: int):
-    """
-    Background task triggered when a download completes.
-    Fetches Audible metadata, computes confidence, and auto-converts if >= AUTO_MATCH_THRESHOLD.
-    """
-    db = SessionLocal()
-    try:
-        dl = db.query(Download).filter(Download.id == download_id).first()
-        if not dl or dl.status != "downloaded":
-            return
-
-        saved = {}
-        if dl.download_metadata:
-            try:
-                saved = json.loads(dl.download_metadata)
-            except Exception:
-                pass
-
-        # Skip if already processed (e.g. re-poll after manual fetch)
-        if "match_confidence" in saved:
-            return
-
-        abs_url    = get_setting(db, "abs_url")
-        abs_token  = get_setting(db, "abs_token")
-        m4b_output = get_setting(db, "m4b_output_path")
-
-        nzb_name   = dl.post_title or dl.nzb_name or ""
-        nzb_title, nzb_author_from_name = _parse_nzb_name(nzb_name)
-        # NZB filename is the most reliable source — forum metadata can be wrong.
-        # Ignore saved author if it looks like a series designation (ends with a digit).
-        saved_author = saved.get("author", "")
-        if saved_author and re.search(r'\d$', saved_author.strip()):
-            saved_author = ""  # looks like "Series Name 1", not a real author name
-        nzb_author = nzb_author_from_name or saved_author
-
-        if not abs_url or not abs_token:
-            log_to_db("INFO", "auto", f"Download #{download_id} complete — ABS not configured, skipping auto-match", download_id=download_id)
-            return
-        if not nzb_title:
-            log_to_db("WARNING", "auto", f"Download #{download_id}: could not extract title from '{nzb_name}'", download_id=download_id)
-            return
-
-        log_to_db("INFO", "auto",
-            f"Download #{download_id}: searching Audible — title='{nzb_title}' author='{nzb_author}' (from: '{nzb_name}')",
-            download_id=download_id)
-
-        try:
-            client  = AbsClient(abs_url, abs_token)
-            results = await asyncio.to_thread(client.search_books, nzb_title.strip(), nzb_author.strip())
-
-            if not results:
-                saved["match_confidence"] = 0
-                dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-                db.commit()
-                log_to_db("WARNING", "auto", f"Download #{download_id}: no Audible results for title='{nzb_title}' author='{nzb_author}'", download_id=download_id)
-                return
-
-            candidate_titles = [r.get("title", "") for r in results[:5]]
-            log_to_db("DEBUG", "auto",
-                f"Download #{download_id}: top {len(candidate_titles)} Audible candidates: {candidate_titles}",
-                download_id=download_id)
-
-            book           = _best_audible_match(results, nzb_title)
-            audible_title  = book.get("title", "")
-            audible_author = book.get("author") or book.get("authors") or ""
-            audible_series, audible_series_part = _extract_audible_series(book)
-            confidence     = _compute_confidence(nzb_title, nzb_author, audible_title, audible_author)
-
-            log_to_db("INFO", "auto",
-                f"Download #{download_id}: best match '{audible_title}' by '{audible_author}' — confidence {confidence}%",
-                download_id=download_id)
-
-            saved["title"]            = audible_title       or saved.get("title", "")
-            saved["author"]           = audible_author      or saved.get("author", "")
-            saved["series"]           = audible_series      or saved.get("series", "")
-            saved["series_part"]      = audible_series_part or saved.get("series_part", "")
-            saved["match_confidence"] = confidence
-
-            if confidence >= AUTO_MATCH_THRESHOLD and dl.download_path:
-                # Validate path exists and has audio files BEFORE locking status to "converting"
-                path_ok = os.path.isdir(dl.download_path)
-                has_audio = False
-                if path_ok:
-                    for root, _, files in os.walk(dl.download_path):
-                        if any(f.lower().endswith((".mp3", ".m4b", ".m4a", ".flac")) for f in files):
-                            has_audio = True
-                            break
-
-                if not path_ok:
-                    log_to_db("WARNING", "auto",
-                        f"Download #{download_id}: path does not exist '{dl.download_path}' — skipping auto-convert",
-                        download_id=download_id)
-                    dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-                    db.commit()
-                elif not has_audio:
-                    log_to_db("WARNING", "auto",
-                        f"Download #{download_id}: no audio files in '{dl.download_path}' — skipping auto-convert",
-                        download_id=download_id)
-                    dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-                    db.commit()
-                else:
-                    safe_title  = _sanitize_filename(saved["title"] or nzb_title)
-                    output_file = (
-                        os.path.join(m4b_output, f"{safe_title}.m4b").replace("\\", "/")
-                        if m4b_output else f"/m4b/{safe_title}.m4b"
-                    )
-                    # Capture plain values before closing session — accessing ORM
-                    # attributes on a detached instance raises DetachedInstanceError.
-                    download_path        = dl.download_path
-                    saved["input_path"]  = download_path
-                    saved["output_file"] = output_file
-                    dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-                    dl.m4b_status        = "queued"
-                    dl.m4b_progress      = None
-                    db.commit()
-                    db.close()
-                    db = None
-
-                    log_to_db("INFO", "auto",
-                        f"Download #{download_id}: queued for auto-conversion — confidence {confidence}% ≥ {AUTO_MATCH_THRESHOLD}%",
-                        download_id=download_id)
-                    await _queued_conversion(
-                        download_id, download_path, output_file,
-                        saved["title"], saved["author"],
-                        saved.get("series", ""), saved.get("series_part", ""),
-                    )
-            else:
-                dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-                db.commit()
-                if not dl.download_path:
-                    log_to_db("WARNING", "auto", f"Download #{download_id}: no download path — cannot auto-convert", download_id=download_id)
-                else:
-                    log_to_db("INFO", "auto",
-                        f"Download #{download_id}: confidence {confidence}% below {AUTO_MATCH_THRESHOLD}% — manual review needed",
-                        download_id=download_id)
-
-        except Exception as exc:
-            logger.error("_auto_process_download failed for #%d: %s", download_id, exc)
-            log_to_db("ERROR", "auto", f"Auto-match failed for #{download_id}: {exc}", download_id=download_id)
-            # If we already set status to "converting" before the error, reset it so the user isn't stuck
-            try:
-                _db = SessionLocal()
-                stuck = _db.query(Download).filter(Download.id == download_id).first()
-                if stuck and stuck.m4b_status == "converting":
-                    stuck.m4b_status    = "m4b_failed"
-                    stuck.conversion_log = f"Auto-conversion error: {exc}"
-                    _db.commit()
-                _db.close()
-            except Exception:
-                pass
-    finally:
-        if db:
-            db.close()
-
-
-def _map_path(path: str, nzbget_prefix: str, local_prefix: str) -> str:
-    """Replace the nzbget path prefix with the local path prefix."""
-    if nzbget_prefix and local_prefix and path.startswith(nzbget_prefix):
-        remainder = path[len(nzbget_prefix):]
-        # Ensure exactly one slash between the local prefix and the remainder,
-        # regardless of whether the saved prefixes have trailing/leading slashes.
-        return local_prefix.rstrip("/") + "/" + remainder.lstrip("/")
-    return path
-
-
-async def _abs_scan_and_match(download_id: int, title: str, author: str, abs_url: str, abs_token: str, abs_library_id: str):
-    """After conversion, scan ABS library and trigger Quick Match on the new item."""
-    if not abs_url or not abs_token or not abs_library_id:
-        return
-
-    client = AbsClient(abs_url, abs_token)
-
-    # Trigger a library scan so ABS picks up the new file
-    try:
-        client.scan_library(abs_library_id)
-        log_to_db("INFO", "abs", "ABS library scan triggered", download_id=download_id)
-    except Exception as exc:
-        log_to_db("WARNING", "abs", f"ABS scan trigger failed: {exc}", download_id=download_id)
-
-    # Poll until the item appears in search (up to ~3 minutes)
-    item_id = None
-    for attempt in range(18):  # 18 × 10s = 3 min
-        await asyncio.sleep(10)
-        try:
-            results = client.search_library(abs_library_id, title)
-            if results:
-                item_id = results[0]["id"]
-                log_to_db("INFO", "abs", f"Book found in ABS (item {item_id}) after {(attempt + 1) * 10}s", download_id=download_id)
-                break
-        except Exception as exc:
-            log_to_db("DEBUG", "abs", f"ABS search attempt {attempt + 1} failed: {exc}", download_id=download_id)
-
-    if not item_id:
-        log_to_db("WARNING", "abs", "Book not found in ABS after 3 minutes — Quick Match skipped", download_id=download_id)
-        return
-
-    try:
-        result = client.quick_match(item_id, title, author)
-        updated = result.get("updated", False)
-        if updated:
-            log_to_db("INFO", "abs", f"Quick Match applied successfully for ABS item {item_id}", download_id=download_id)
-        else:
-            log_to_db("WARNING", "abs", f"Quick Match found no update for ABS item {item_id} — response: {result}", download_id=download_id)
-    except Exception as exc:
-        log_to_db("ERROR", "abs", f"Quick Match failed for item {item_id}: {exc}", download_id=download_id)
-
-
-async def _queued_conversion(
-    download_id: int,
-    input_path: str,
-    output_file: str,
-    title: str,
-    author: str,
-    series: str,
-    series_part: str,
-):
-    """
-    Queue wrapper: waits for the semaphore, then runs _run_m4b_conversion.
-    Skips the job if it was dequeued (status no longer "queued") or superseded
-    by a newer queue request for the same download while it was waiting.
-    """
-    generation = _queue_generation.get(download_id, 0) + 1
-    _queue_generation[download_id] = generation
-
-    async with _conversion_semaphore:
-        # Now at the front of the queue — transition from "queued" → "converting"
-        _db = SessionLocal()
-        try:
-            _dl = _db.query(Download).filter(Download.id == download_id).first()
-            if not _dl or _dl.m4b_status != "queued" or _queue_generation.get(download_id) != generation:
-                log_to_db("INFO", "conversion",
-                          f"Skipping queued conversion for download #{download_id} — dequeued or superseded",
-                          download_id=download_id)
-                return
-            _dl.m4b_status   = "converting"
-            _dl.m4b_progress = None
-            _db.commit()
-        finally:
-            _db.close()
-        await _run_m4b_conversion(
-            download_id, input_path, output_file, title, author, series, series_part,
-        )
-
-
-async def _run_m4b_conversion(
-    download_id: int,
-    input_path: str,
-    output_file: str,
-    title: str,
-    author: str,
-    series: str,
-    series_part: str,
-):
-    """Background task: run m4b-tool, optionally move the result, then update the DB."""
-    db = SessionLocal()
-    try:
-        move_template = get_setting(db, "m4b_move_template")
-        m4b_jobs = get_setting(db, "m4b_jobs")
-        m4b_bitrate = get_setting(db, "m4b_bitrate")
-
-        # ── Pre-flight check ──────────────────────────────────────────────────
-        # If there is already an .m4b in the input folder, use it directly
-        # rather than re-encoding with m4b-tool.
-        existing_m4bs = []
-        for root, _, files in os.walk(input_path):
-            for f in files:
-                if f.lower().endswith(".m4b"):
-                    existing_m4bs.append(os.path.join(root, f))
-
-        if existing_m4bs:
-            existing = existing_m4bs[0]
-            log_to_db("INFO", "conversion",
-                      f"Existing .m4b found — skipping m4b-tool: {existing}",
-                      download_id=download_id)
-            log = f"Existing .m4b used: {existing}"
-            returncode = 0
-            _no_files = False
-            # Treat the existing file as the conversion output
-            output_file = existing
-        else:
-            # Check there are actually MP3s to convert before invoking m4b-tool
-            audio_dirs = _find_audio_dirs(input_path)
-            has_mp3s = any(
-                f.lower().endswith(".mp3")
-                for d in audio_dirs
-                for f in os.listdir(d)
-            )
-            if not has_mp3s:
-                log_to_db("ERROR", "conversion",
-                          "No .mp3 or .m4b files found in input path — nothing to convert",
-                          download_id=download_id)
-                dl = db.query(Download).filter(Download.id == download_id).first()
-                if dl:
-                    dl.m4b_status = "m4b_failed"
-                    dl.conversion_log = "No .mp3 or .m4b files found in input path."
-                    db.commit()
-                return
-
-            log_to_db("DEBUG", "conversion",
-                      f"Audio directories found: {audio_dirs}", download_id=download_id)
-
-            cmd = [
-                "m4b-tool", "merge", *audio_dirs,
-                f"--output-file={output_file}",
-                "--no-interaction",
-            ]
-            if title:
-                cmd += [f"--name={title}", f"--album={title}"]
-            if author:
-                cmd += [f"--artist={author}", f"--albumartist={author}"]
-            if series:
-                cmd.append(f"--series={series}")
-            if series_part:
-                cmd.append(f"--series-part={series_part}")
-            if m4b_jobs:
-                cmd.append(f"--jobs={m4b_jobs}")
-            if m4b_bitrate:
-                cmd.append(f"--audio-bitrate={m4b_bitrate}")
-
-            logger.info("Starting m4b-tool for download #%d: %s", download_id, " ".join(cmd))
-            log_to_db("INFO", "conversion", "Starting m4b-tool conversion", download_id=download_id)
-
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-
-            # Stream stdout in chunks and split on \r OR \n so we catch carriage-return
-            # progress bars (m4b-tool uses \r to overwrite the current line in-place).
-            buf = ""
-            log_lines = []
-            last_progress = -1
-
-            while True:
-                chunk = await proc.stdout.read(512)
-                if not chunk:
-                    break
-                buf += chunk.decode("utf-8", errors="replace")
-                # Split on \r\n, \n, or bare \r — keep the last incomplete fragment
-                parts = re.split(r'\r\n|\n|\r', buf)
-                buf = parts[-1]
-                for line in parts[:-1]:
-                    if line.strip():
-                        log_lines.append(line)
-                    m = re.search(r'\b(\d{1,3})%', line)
-                    if m:
-                        pct = min(100, int(m.group(1)))
-                        if pct != last_progress:
-                            last_progress = pct
-                            try:
-                                dl_prog = db.query(Download).filter(Download.id == download_id).first()
-                                if dl_prog:
-                                    dl_prog.m4b_progress = pct
-                                    db.commit()
-                            except Exception:
-                                pass
-
-                # Also check the incomplete buffer fragment for progress updates
-                m = re.search(r'\b(\d{1,3})%', buf)
-                if m:
-                    pct = min(100, int(m.group(1)))
-                    if pct != last_progress:
-                        last_progress = pct
-                        try:
-                            dl_prog = db.query(Download).filter(Download.id == download_id).first()
-                            if dl_prog:
-                                dl_prog.m4b_progress = pct
-                                db.commit()
-                        except Exception:
-                            pass
-
-            if buf.strip():
-                log_lines.append(buf)
-
-            await proc.wait()
-            log = "\n".join(log_lines)
-            returncode = proc.returncode
-
-            # Store the full m4b-tool output as a DEBUG entry linked to this download
-            log_to_db("DEBUG", "conversion", f"m4b-tool output:\n{log}", download_id=download_id)
-
-            # m4b-tool sometimes exits 0 even on soft failures — check output too
-            _no_files = "no files to convert" in log.lower()
-
-        # ── Common success / failure path ─────────────────────────────────────
-        dl = db.query(Download).filter(Download.id == download_id).first()
-        if dl:
-            if returncode == 0 and not _no_files:
-                final_path = output_file
-                # Move the file if a move template is configured
-                if move_template and os.path.isfile(output_file):
-                    filename = os.path.basename(output_file)
-                    dest = _resolve_move_template(
-                        move_template, title, author, series, series_part, filename
-                    )
-                    try:
-                        os.makedirs(os.path.dirname(dest), exist_ok=True)
-                        shutil.move(output_file, dest)
-                        final_path = dest
-                        logger.info("Moved M4B to %s", dest)
-                        # Clean up the input folder now that the m4b is safely moved
-                        if (os.path.isdir(input_path) and
-                                os.path.abspath(input_path) != os.path.abspath(os.path.dirname(dest))):
-                            try:
-                                shutil.rmtree(input_path)
-                                log_to_db("INFO", "conversion", f"Deleted input folder: {input_path}", download_id=download_id)
-                            except Exception as rm_exc:
-                                log_to_db("WARNING", "conversion", f"Could not delete input folder {input_path}: {rm_exc}", download_id=download_id)
-                    except Exception as move_exc:
-                        logger.warning("Could not move M4B to %s: %s", dest, move_exc)
-                        log += f"\n[Move failed: {move_exc}]"
-                        log_to_db("ERROR", "conversion", f"Move failed to {dest}: {move_exc}", download_id=download_id)
-                        dl.m4b_status = "move_failed"
-                        dl.m4b_path = output_file  # file still exists here
-                        dl.conversion_log = log[-4000:]
-                        db.commit()
-                        return
-                dl.m4b_status = "converted"
-                dl.m4b_path = final_path
-                logger.info("M4B conversion complete for download #%d: %s", download_id, final_path)
-                log_to_db("INFO", "conversion", f"M4B ready at: {final_path}", download_id=download_id)
-                # Write metadata.abs for Audiobookshelf
-                try:
-                    meta_path = _write_abs_metadata(final_path, title, author, series, series_part)
-                    log_to_db("INFO", "conversion", f"metadata.abs written at: {meta_path}", download_id=download_id)
-                except Exception as meta_exc:
-                    logger.warning("Could not write metadata.abs: %s", meta_exc)
-                    log_to_db("WARNING", "conversion", f"metadata.abs write failed: {meta_exc}", download_id=download_id)
-
-                # Trigger ABS library scan + Quick Match (if configured)
-                abs_url = get_setting(db, "abs_url")
-                abs_token = get_setting(db, "abs_token")
-                abs_library_id = get_setting(db, "abs_library_id")
-                await _abs_scan_and_match(download_id, title, author, abs_url, abs_token, abs_library_id)
-            else:
-                dl.m4b_status = "m4b_failed"
-                if _no_files:
-                    reason = "no audio files found in the input path — check subdirectory structure"
-                else:
-                    reason = f"exit code {returncode}"
-                logger.error("m4b-tool failed for download #%d: %s", download_id, reason)
-                log_to_db("ERROR", "conversion", f"m4b-tool failed: {reason} — see DEBUG entry for full output", download_id=download_id)
-            dl.conversion_log = log[-4000:]  # keep last 4000 chars
-            db.commit()
-    except Exception as exc:
-        logger.error("M4B conversion error for download %d: %s", download_id, exc)
-        try:
-            dl = db.query(Download).filter(Download.id == download_id).first()
-            if dl:
-                dl.m4b_status = "m4b_failed"
-                dl.conversion_log = str(exc)
-                db.commit()
-        except Exception:
-            pass
-    finally:
-        db.close()
-
+# ── sending NZBs ──────────────────────────────────────────────────────────────
 
 @router.post("/send", response_class=HTMLResponse)
-async def send_to_nzbget(
+def send_to_nzbget(
     request: Request,
     nzb_hash: str = Form(...),
     nzb_title: str = Form(...),
@@ -706,296 +90,343 @@ async def send_to_nzbget(
     book_author: str = Form(default=""),
     book_series: str = Form(default=""),
     book_series_part: str = Form(default=""),
+    book_narrator: str = Form(default=""),
+    replace_id: str = Form(default=""),
+    force: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
-    # Retrieve NZBGet settings
-    nzbget_url = get_setting(db, "nzbget_url")
-    nzbget_username = get_setting(db, "nzbget_username")
-    nzbget_password = get_setting(db, "nzbget_password")
-    nzbget_category = get_setting(db, "nzbget_category")
+    if not get_setting(db, "nzbget_url"):
+        return not_configured("NZBGet")
 
-    if not nzbget_url:
-        return HTMLResponse(
-            '<div class="alert alert-warning">'
-            '<i class="bi bi-gear-fill me-2"></i>'
-            'NZBGet is not configured. '
-            '<a href="/settings" class="alert-link">Go to Settings</a></div>'
-        )
+    replacing = _get(db, int(replace_id)) if replace_id.isdigit() else None
 
-    # Step 1: Download the NZB file from the appropriate source
+    if not replacing and force != "1":
+        duplicates = find_duplicates(db, book_title or post_title, book_author, nzb_hash=nzb_hash, search_term=search_term)
+        if duplicates:
+            resend = {
+                "nzb_hash": nzb_hash, "nzb_title": nzb_title, "nzb_source": nzb_source,
+                "search_term": search_term, "password": password, "post_title": post_title,
+                "topic_id": topic_id, "msg_id": msg_id, "book_title": book_title,
+                "book_author": book_author, "book_series": book_series,
+                "book_series_part": book_series_part, "book_narrator": book_narrator, "force": "1",
+            }
+            form = "".join(f'<input type="hidden" name="{escape(k)}" value="{escape(v)}" />' for k, v in resend.items())
+            reasons = "".join(f"<li>{escape(r)}</li>" for r in duplicates)
+            return HTMLResponse(
+                '<div class="alert alert-warning"><i class="bi bi-exclamation-triangle-fill me-2"></i>'
+                f'<strong>Not sent — this looks like a duplicate:</strong><ul class="mb-2 mt-1">{reasons}</ul>'
+                f'<form hx-post="/downloads/send" hx-target="#download-status" hx-swap="innerHTML">{form}'
+                '<button type="submit" class="btn btn-sm btn-outline-warning">'
+                '<i class="bi bi-send me-1"></i>Send anyway</button></form></div>'
+            )
+
     try:
-        if nzb_source == "binsearch":
-            nzb_content = BinsearchScraper().download_nzb(nzb_hash, name=nzb_title)
-        else:
-            nzb_content = NzbkingScraper().download_nzb(nzb_hash)
+        nzb_content = fetch_nzb(nzb_source, nzb_hash, nzb_title)
+    except NzbError as exc:
+        return alert("danger", str(exc))
     except Exception as exc:
         logger.error("Failed to download NZB %s: %s", nzb_hash, exc)
-        return HTMLResponse(
-            f'<div class="alert alert-danger">'
-            f'<i class="bi bi-exclamation-triangle-fill me-2"></i>'
-            f"Failed to download NZB: {exc}</div>"
-        )
+        return alert("danger", f"Failed to download NZB: {exc}")
 
-    # Step 2: Send to NZBGet
-    safe_name = _sanitize_filename(post_title or nzb_title or search_term or nzb_hash)
+    safe_name = library.sanitize_filename(post_title or nzb_title or search_term or nzb_hash)
+    if replacing:
+        password = password or replacing.password or ""
+        safe_name = replacing.nzb_name or safe_name
     try:
-        client = NzbgetClient(nzbget_url, nzbget_username, nzbget_password)
-        job_id = client.add_nzb(
-            nzb_content,
-            name=safe_name,
-            category=nzbget_category,
-            password=password,
-        )
+        job_id = submit_to_nzbget(db, nzb_content, safe_name, password)
     except Exception as exc:
         logger.error("Failed to send NZB '%s' to NZBGet: %s", safe_name, exc)
-        # Save a failed record
-        record = Download(
-            post_title=post_title,
-            topic_id=topic_id,
-            msg_id=msg_id,
-            search_term=search_term,
-            password=password,
-            nzb_name=safe_name,
-            nzb_hash=nzb_hash,
-            nzbget_id=None,
-            status="failed",
-        )
-        db.add(record)
-        db.commit()
-        return HTMLResponse(
-            f'<div class="alert alert-danger">'
-            f'<i class="bi bi-exclamation-triangle-fill me-2"></i>'
-            f"Failed to send to NZBGet: {exc}</div>"
-        )
+        if not replacing:
+            db.add(Download(
+                post_title=post_title, topic_id=topic_id, msg_id=msg_id, search_term=search_term,
+                password=password, nzb_name=safe_name, nzb_hash=nzb_hash, nzb_source=nzb_source,
+                nzb_title=nzb_title, nzbget_id=None, status="failed",
+                error_message=f"Could not send to NZBGet: {exc}",
+            ))
+            db.commit()
+        return alert("danger", f"Failed to send to NZBGet: {exc}")
 
-    # Step 3: Save to DB
-    # Pre-populate download_metadata from forum post if any fields were extracted
+    if replacing:
+        meta = replacing.parsed_metadata
+        for key in ("auto_processed", "match_confidence", "input_path"):
+            meta.pop(key, None)
+        replacing.set_metadata(meta)
+        replacing.nzb_hash, replacing.nzb_source, replacing.nzb_title = nzb_hash, nzb_source, nzb_title
+        _reset_for_new_download(replacing, job_id)
+        db.commit()
+        log_to_db("INFO", "download", f"#{replacing.id}: re-sent with another NZB (job {job_id})", download_id=replacing.id)
+        return _refresh(alert("success", f"Sent the new NZB to NZBGet (job {job_id}). The download row has been updated."))
+
     initial_metadata = {}
     if book_title:       initial_metadata["title"]       = book_title
     if book_author:      initial_metadata["author"]      = book_author
     if book_series:      initial_metadata["series"]      = book_series
     if book_series_part: initial_metadata["series_part"] = book_series_part
+    if book_narrator:    initial_metadata["narrator"]    = book_narrator
 
     record = Download(
-        post_title=post_title,
-        topic_id=topic_id,
-        msg_id=msg_id,
-        search_term=search_term,
-        password=password,
-        nzb_name=safe_name,
-        nzb_hash=nzb_hash,
-        nzbget_id=job_id,
-        status="sent",
+        post_title=post_title, topic_id=topic_id, msg_id=msg_id, search_term=search_term,
+        password=password, nzb_name=safe_name, nzb_hash=nzb_hash, nzb_source=nzb_source,
+        nzb_title=nzb_title, nzbget_id=job_id, status="sent",
         download_metadata=json.dumps(initial_metadata, ensure_ascii=False) if initial_metadata else None,
     )
     db.add(record)
     db.commit()
 
     logger.info("NZB '%s' sent to NZBGet with job ID %d", safe_name, job_id)
-    return HTMLResponse(
-        f'<div class="alert alert-success">'
-        f'<i class="bi bi-check-circle-fill me-2"></i>'
-        f"<strong>{safe_name}</strong> sent to NZBGet! "
-        f"Job ID: <code>{job_id}</code> &mdash; "
-        f'<a href="/downloads" class="alert-link">View Downloads</a></div>'
+    return alert(
+        "success", f"{safe_name} sent to NZBGet! Job ID {job_id} — ",
+        '<a href="/downloads" class="alert-link">View Downloads</a>',
     )
 
 
-@router.get("", response_class=HTMLResponse)
-async def downloads_page(request: Request, db: Session = Depends(get_db)):
-    downloads = db.query(Download).order_by(Download.created_at.desc()).all()
-    return templates.TemplateResponse(
-        "downloads.html",
-        {"request": request, "downloads": downloads},
-    )
+def _reset_for_new_download(dl: Download, job_id: int):
+    dl.nzbget_id = job_id
+    dl.status = "sent"
+    dl.error_message = None
+    dl.missing_polls = 0
+    dl.download_progress = None
+    dl.download_path = None
+    dl.m4b_status = None
+    dl.m4b_progress = None
+    dl.abs_status = None
+    dl.abs_item_id = None
 
 
-def _apply_dl_filter(q, dl_filter: str):
-    """Apply status filter to a Download query."""
-    if dl_filter == "active":
-        # Show: downloading (sent) OR downloaded-but-not-yet-converted (includes queued/converting)
-        # NULL m4b_status must be handled explicitly — SQL NULL != 'converted' evaluates to NULL not TRUE
-        q = q.filter(
-            or_(
-                Download.status == "sent",
-                and_(
-                    Download.status == "downloaded",
-                    or_(Download.m4b_status.is_(None), Download.m4b_status != "converted"),
-                ),
-            )
-        )
-    return q
-
-
-@router.post("/sync-status", response_class=HTMLResponse)
-async def sync_status(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    dl_filter: str = Form(default="active"),
-    dl_limit: int = Form(default=5),
-    db: Session = Depends(get_db),
-):
-    """
-    Check nzbget history for any downloads still in 'sent' status and update them.
-    Called by HTMX polling on the downloads page.
-    """
-    nzbget_url = get_setting(db, "nzbget_url")
-    nzbget_username = get_setting(db, "nzbget_username")
-    nzbget_password = get_setting(db, "nzbget_password")
-    nzbget_prefix = get_setting(db, "nzbget_path_prefix")
-    local_prefix = get_setting(db, "local_path_prefix")
-
-    pending = db.query(Download).filter(
-        Download.status == "sent", Download.nzbget_id.isnot(None)
-    ).all()
-
-    def _fetch_downloads():
-        q = db.query(Download).order_by(Download.created_at.desc())
-        q = _apply_dl_filter(q, dl_filter)
-        if dl_limit > 0:
-            q = q.limit(dl_limit)
-        return q.all()
-
-    if not pending or not nzbget_url:
-        downloads = _fetch_downloads()
-        return templates.TemplateResponse(
-            "partials/download_rows.html",
-            {"request": request, "downloads": downloads, "queue_positions": _get_queue_positions(db)},
-        )
-
-    try:
-        client = NzbgetClient(nzbget_url, nzbget_username, nzbget_password)
-        history = client.get_history()
-        history_by_id = {item.get("NZBID"): item for item in history}
-
-        # Also fetch the active queue to get download progress %
-        queue = client.get_queue()
-        queue_by_id = {item.get("NZBID"): item for item in queue}
-
-        newly_completed = []
-        for dl in pending:
-            # Update download progress from active queue
-            q_item = queue_by_id.get(dl.nzbget_id)
-            if q_item:
-                file_mb = q_item.get("FileSizeMB", 0)
-                remaining_mb = q_item.get("RemainingSizeMB", 0)
-                if file_mb > 0:
-                    pct = round((file_mb - remaining_mb) / file_mb * 100)
-                    dl.download_progress = max(0, min(99, pct))
-
-            # Check history for completion
-            item = history_by_id.get(dl.nzbget_id)
-            if item:
-                raw_status = item.get("Status", "").upper()
-                if "SUCCESS" in raw_status:
-                    dl.status = "downloaded"
-                    dl.download_progress = 100
-                    # Capture the path where nzbget stored the files
-                    final_dir = item.get("FinalDir") or item.get("DestDir", "")
-                    if final_dir:
-                        dl.download_path = _map_path(final_dir, nzbget_prefix, local_prefix)
-                    newly_completed.append(dl.id)
-                elif "FAILURE" in raw_status or "DELETED" in raw_status:
-                    dl.status = "failed"
-        db.commit()
-        for dl_id in newly_completed:
-            background_tasks.add_task(_auto_process_download, dl_id)
-    except Exception as exc:
-        logger.warning("sync_status: could not reach nzbget: %s", exc)
-
-    downloads = _fetch_downloads()
-    return templates.TemplateResponse(
-        "partials/download_rows.html",
-        {"request": request, "downloads": downloads, "queue_positions": _get_queue_positions(db)},
-    )
-
-
-@router.get("/{download_id}/metadata-lookup", response_class=HTMLResponse)
-async def metadata_lookup(
-    request: Request,
-    download_id: int,
-    db: Session = Depends(get_db),
-):
-    """Search Audible via ABS and return the convert form pre-filled with results."""
-    dl = db.query(Download).filter(Download.id == download_id).first()
+@router.post("/{download_id}/retry-download", response_class=HTMLResponse)
+def retry_download(request: Request, download_id: int, db: Session = Depends(get_db)):
+    """Fetch the same NZB again and re-submit it (e.g. after fixing the password or disk space)."""
+    dl = _get(db, download_id)
     if not dl:
-        return HTMLResponse('<div class="alert alert-danger">Download not found.</div>')
+        return HTMLResponse('<tr><td colspan="6">Not found.</td></tr>')
+    if not dl.nzb_hash:
+        dl.error_message = "No NZB recorded for this download — use 'Other NZB' instead"
+        db.commit()
+        return _rows(request, db, [dl])
+    try:
+        content = fetch_nzb(dl.nzb_source or "nzbking", dl.nzb_hash, dl.nzb_title or dl.nzb_name or "")
+        job_id = submit_to_nzbget(db, content, dl.nzb_name or f"bookclub-{dl.id}", dl.password or "")
+    except Exception as exc:
+        dl.error_message = f"Retry failed: {exc}"
+        db.commit()
+        return _rows(request, db, [dl])
+    meta = dl.parsed_metadata
+    meta.pop("auto_processed", None)
+    dl.set_metadata(meta)
+    _reset_for_new_download(dl, job_id)
+    db.commit()
+    log_to_db("INFO", "download", f"#{dl.id}: re-sent to NZBGet (job {job_id})", download_id=dl.id)
+    return _rows(request, db, [dl])
 
-    abs_url = get_setting(db, "abs_url")
-    abs_token = get_setting(db, "abs_token")
 
-    # Existing saved metadata (paths we want to keep)
-    saved = {}
-    if dl.download_metadata:
+@router.get("/{download_id}/alternatives", response_class=HTMLResponse)
+def alternatives(request: Request, download_id: int, db: Session = Depends(get_db)):
+    """Search both indexers again so a failed download can be replaced with another NZB."""
+    dl = _get(db, download_id)
+    if not dl:
+        return alert("danger", "Download not found.")
+    term = dl.search_term or ""
+    if not term:
+        return alert("warning", "No search term recorded for this download — search again from the Search page.")
+    results, notes = [], []
+    for source in ("nzbking", "binsearch"):
         try:
-            saved = json.loads(dl.download_metadata)
-        except Exception:
-            pass
-
-    lookup_error = None
-    if abs_url and abs_token:
-        nzb_name     = dl.post_title or dl.nzb_name or ""
-        nzb_title    = _extract_nzb_title(nzb_name)
-        query_title  = nzb_title or saved.get("title") or ""
-        query_author = saved.get("author") or _extract_nzb_author(nzb_name)
-        try:
-            log_to_db("INFO", "metadata",
-                f"Manual Audible fetch #{download_id}: searching title='{query_title}' author='{query_author}'",
-                download_id=download_id)
-            client  = AbsClient(abs_url, abs_token)
-            results = client.search_books(query_title.strip(), author=query_author.strip())
-            if results:
-                candidate_titles = [r.get("title", "") for r in results[:5]]
-                log_to_db("DEBUG", "metadata",
-                    f"Manual Audible fetch #{download_id}: candidates {candidate_titles}",
-                    download_id=download_id)
-                book           = _best_audible_match(results, nzb_title)
-                audible_title  = book.get("title", "")
-                audible_author = book.get("author") or book.get("authors") or ""
-                audible_series, audible_series_part = _extract_audible_series(book)
-                confidence     = _compute_confidence(nzb_title, query_author, audible_title, audible_author)
-
-                log_to_db("DEBUG", "metadata", f"Audible raw result: {json.dumps(book, ensure_ascii=False)}", download_id=download_id)
-                log_to_db("INFO", "metadata",
-                    f"Manual Audible fetch #{download_id}: selected '{audible_title}' by '{audible_author}' — confidence {confidence}%",
-                    download_id=download_id)
-
-                # Explicit fetch — always replace with Audible data; fall back to saved if Audible has nothing
-                saved["title"]            = audible_title       or saved.get("title", "")
-                saved["author"]           = audible_author      or saved.get("author", "")
-                saved["series"]           = audible_series      or saved.get("series", "")
-                saved["series_part"]      = audible_series_part or saved.get("series_part", "")
-                saved["match_confidence"] = confidence
-
-                # Persist so the badge shows on the downloads page
-                dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-                db.commit()
-            else:
-                lookup_error = f"No Audible results found for: {query_title}"
+            found = search_nzbs(source, term)
+            results.extend(r for r in found if r.get("nzb_hash") != dl.nzb_hash)
         except Exception as exc:
-            logger.warning("metadata_lookup failed for download %d: %s", download_id, exc)
-            lookup_error = f"Lookup failed: {exc}"
-    else:
-        lookup_error = "Audiobookshelf is not configured — cannot query Audible."
-
-    m4b_output_path = get_setting(db, "m4b_output_path")
-    safe_title = _sanitize_filename(saved.get("title") or dl.post_title or dl.nzb_name or "output")
-    default_output = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
-
+            notes.append(f"{source} search failed: {exc}")
+    if not results:
+        notes.append("Only the NZB that already failed was found." if dl.nzb_hash else "No NZBs found.")
+    meta = dl.parsed_metadata
     return templates.TemplateResponse(
-        "partials/convert_form.html",
+        "partials/nzb_results.html",
         {
-            "request": request,
-            "dl": dl,
-            "saved": saved,
-            "suggested_output": saved.get("output_file") or default_output,
-            "lookup_error": lookup_error,
+            "request": request, "results": results, "notes": notes, "duplicates": [],
+            "search_term": term, "password": dl.password or "", "post_title": dl.post_title or "",
+            "topic_id": dl.topic_id or "", "msg_id": dl.msg_id or "",
+            "book_title": meta.get("title", ""), "book_author": meta.get("author", ""),
+            "book_series": meta.get("series", ""), "book_series_part": meta.get("series_part", ""),
+            "book_narrator": meta.get("narrator", ""), "replace_id": str(dl.id),
         },
     )
 
 
+# ── downloads page ────────────────────────────────────────────────────────────
+
+@router.get("", response_class=HTMLResponse)
+def downloads_page(request: Request, db: Session = Depends(get_db)):
+    downloads = _apply_dl_filter(db.query(Download), "active").order_by(Download.created_at.desc()).limit(5).all()
+    return templates.TemplateResponse(
+        "downloads.html",
+        {
+            "request": request,
+            "downloads": downloads,
+            "queue_positions": queue_positions(db),
+            "abs_url": get_setting(db, "abs_url").rstrip("/"),
+            "running_id": pipeline.current_id,
+        },
+    )
+
+
+def _apply_dl_filter(q, dl_filter: str):
+    """
+    "active" = anything that still needs attention or is in progress. A book
+    drops out once it is converted and imported (or ABS isn't used).
+    NULL columns are handled explicitly — SQL NULL comparisons are never TRUE.
+    """
+    if dl_filter == "active":
+        finished = and_(
+            func.coalesce(Download.m4b_status, "") == "converted",
+            func.coalesce(Download.abs_status, "imported").in_(("imported", "skipped")),
+        )
+        q = q.filter(not_(finished))
+    return q
+
+
+@router.post("/sync-status", response_class=HTMLResponse)
+def sync_status(
+    request: Request,
+    dl_filter: str = Form(default="active"),
+    dl_limit: int = Form(default=5),
+    db: Session = Depends(get_db),
+):
+    """Render the download rows. NZBGet is polled by the background pipeline, not here."""
+    q = _apply_dl_filter(db.query(Download).order_by(Download.created_at.desc()), dl_filter)
+    if dl_limit > 0:
+        q = q.limit(dl_limit)
+    return _rows(request, db, q.all())
+
+
+# ── matching & conversion ─────────────────────────────────────────────────────
+
+@router.get("/{download_id}/convert", response_class=HTMLResponse)
+def get_convert_form(request: Request, download_id: int, db: Session = Depends(get_db)):
+    dl = _get(db, download_id)
+    if not dl:
+        return alert("danger", "Download not found.")
+    if dl.status != "downloaded":
+        return alert("warning", "Download must be completed before converting.")
+    return _convert_form(request, db, dl)
+
+
+@router.get("/{download_id}/metadata-lookup", response_class=HTMLResponse)
+def metadata_lookup(
+    request: Request,
+    download_id: int,
+    title: str = "",
+    author: str = "",
+    provider: str = "",
+    db: Session = Depends(get_db),
+):
+    """Search Audible via ABS and show the candidates to pick from."""
+    dl = _get(db, download_id)
+    if not dl:
+        return alert("danger", "Download not found.")
+    abs_url, abs_token = get_setting(db, "abs_url"), get_setting(db, "abs_token")
+    if not abs_url or not abs_token:
+        return _convert_form(request, db, dl, lookup_error="Audiobookshelf is not configured — cannot query Audible.")
+
+    saved = dl.parsed_metadata
+    nzb_title, nzb_author = parse_nzb_name(dl.post_title or dl.nzb_name or "")
+    query_title = (title or nzb_title or saved.get("title") or "").strip()
+    query_author = (author if title else (author or saved.get("author") or nzb_author)).strip()
+    provider = provider or get_setting(db, "audible_provider")
+    try:
+        log_to_db("INFO", "metadata", f"#{download_id}: searching {provider} for '{query_title}' / '{query_author}'",
+                  download_id=download_id)
+        results = AbsClient(abs_url, abs_token).search_books(query_title, author=query_author, provider=provider)
+    except Exception as exc:
+        logger.warning("metadata_lookup failed for download %d: %s", download_id, exc)
+        return _convert_form(request, db, dl, lookup_error=f"Lookup failed: {exc}")
+
+    candidates = rank_candidates(results, query_title, query_author)
+    return templates.TemplateResponse(
+        "partials/match_picker.html",
+        {
+            "request": request,
+            "dl": dl,
+            "candidates": candidates,
+            "query_title": query_title,
+            "query_author": query_author,
+            "provider": provider,
+            "providers": AUDIBLE_PROVIDERS,
+        },
+    )
+
+
+@router.post("/{download_id}/apply-match", response_class=HTMLResponse)
+def apply_match(request: Request, download_id: int, candidate: str = Form(...), db: Session = Depends(get_db)):
+    dl = _get(db, download_id)
+    if not dl:
+        return alert("danger", "Download not found.")
+    try:
+        chosen = json.loads(candidate)
+        if not isinstance(chosen, dict):
+            raise ValueError("bad candidate")
+    except ValueError:
+        return alert("danger", "Could not read the selected match.")
+    meta = dl.parsed_metadata
+    for key in ("subtitle", "narrator", "series", "series_part", "year", "publisher", "description",
+                "asin", "isbn", "language", "genres", "cover_url"):
+        meta.pop(key, None)  # don't mix fields from a previous, different match
+    apply_candidate(meta, chosen)
+    dl.set_metadata(meta)
+    db.commit()
+    log_to_db("INFO", "metadata", f"#{download_id}: match chosen — '{meta.get('title')}' by '{meta.get('author')}'",
+              download_id=download_id)
+    return _refresh(_convert_form(request, db, dl, save_success="Match applied — check the details, then start the conversion."))
+
+
+_FORM_FIELDS = ("title", "author", "narrator", "series", "series_part", "year", "asin", "input_path")
+
+
+def _save_form(dl: Download, form: dict) -> dict:
+    meta = dl.parsed_metadata
+    for key in _FORM_FIELDS:
+        meta[key] = (form.get(key) or "").strip()
+    meta.pop("output_file", None)  # destination now comes from the library template
+    dl.set_metadata(meta)
+    return meta
+
+
+@router.post("/{download_id}/save-metadata", response_class=HTMLResponse)
+async def save_metadata(request: Request, download_id: int, db: Session = Depends(get_db)):
+    dl = _get(db, download_id)
+    if not dl:
+        return alert("danger", "Download not found.")
+    _save_form(dl, dict(await request.form()))
+    db.commit()
+    return _convert_form(request, db, dl, save_success="Saved.")
+
+
+@router.post("/{download_id}/convert", response_class=HTMLResponse)
+async def start_convert(request: Request, download_id: int, db: Session = Depends(get_db)):
+    dl = _get(db, download_id)
+    if not dl:
+        return alert("danger", "Download not found.")
+    if dl.m4b_status == "converting":
+        return alert("warning", "This book is already converting.")
+    meta = _save_form(dl, dict(await request.form()))
+    db.commit()
+    problem = check_input_folder(meta.get("input_path") or dl.download_path or "")
+    if problem:
+        return _convert_form(request, db, dl, lookup_error=problem)
+    if not meta.get("title") or not meta.get("author"):
+        return _convert_form(request, db, dl, lookup_error="Title and author are required.")
+
+    enqueue(dl)
+    db.commit()
+    pipeline.queue_changed()
+    position = queue_positions(db).get(dl.id, 1)
+    return _refresh(alert(
+        "info",
+        f"{dl.display_title} is queued for conversion (position {position}). "
+        "Progress shows in the table above — you can close this page.",
+    ))
+
+
 @router.post("/{download_id}/reset-conversion", response_class=HTMLResponse)
-async def reset_conversion(
+def reset_conversion(
     request: Request,
     download_id: int,
     view: str = "row",
@@ -1006,196 +437,59 @@ async def reset_conversion(
     Returns the refreshed table row by default, or the convert form when view=form
     (used by the Reset button inside the convert panel).
     """
-    dl = db.query(Download).filter(Download.id == download_id).first()
+    dl = _get(db, download_id)
     if not dl:
         if view == "form":
-            return HTMLResponse(f'<div class="alert alert-danger">Download #{download_id} not found.</div>')
+            return alert("danger", f"Download #{download_id} not found.")
         return HTMLResponse('<tr><td colspan="6">Not found.</td></tr>')
 
+    if pipeline.cancel(download_id):
+        log_to_db("INFO", "conversion", f"#{download_id}: running conversion stopped by user", download_id=download_id)
     dl.m4b_status   = None
     dl.m4b_progress = None
     db.commit()
     log_to_db("INFO", "conversion", f"Conversion status manually reset for download #{download_id}", download_id=download_id)
 
     if view != "form":
-        return templates.TemplateResponse(
-            "partials/download_rows.html",
-            {"request": request, "downloads": [dl], "queue_positions": _get_queue_positions(db)},
-        )
-
-    saved = {}
-    if dl.download_metadata:
-        try:
-            saved = json.loads(dl.download_metadata)
-        except Exception:
-            pass
-
-    m4b_output_path = get_setting(db, "m4b_output_path")
-    safe_title      = _sanitize_filename(saved.get("title") or dl.post_title or dl.nzb_name or "output")
-    default_output  = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
-
-    return templates.TemplateResponse(
-        "partials/convert_form.html",
-        {
-            "request":          request,
-            "dl":               dl,
-            "saved":            saved,
-            "suggested_output": saved.get("output_file") or default_output,
-        },
-    )
+        return _rows(request, db, [dl])
+    return _convert_form(request, db, dl)
 
 
-@router.get("/{download_id}/convert", response_class=HTMLResponse)
-async def get_convert_form(
-    request: Request,
-    download_id: int,
-    db: Session = Depends(get_db),
-):
-    dl = db.query(Download).filter(Download.id == download_id).first()
+@router.post("/{download_id}/reimport", response_class=HTMLResponse)
+def reimport(request: Request, download_id: int, db: Session = Depends(get_db)):
+    dl = _get(db, download_id)
     if not dl:
-        return HTMLResponse('<div class="alert alert-danger">Download not found.</div>')
-    if dl.status != "downloaded":
-        return HTMLResponse('<div class="alert alert-warning">Download must be completed before converting.</div>')
-
-    # Pre-fill from previously saved metadata if available
-    saved = {}
-    if dl.download_metadata:
-        try:
-            saved = json.loads(dl.download_metadata)
-        except Exception:
-            pass
-
-    m4b_output_path = get_setting(db, "m4b_output_path")
-    safe_title = _sanitize_filename(dl.post_title or dl.nzb_name or "output")
-    default_output = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
-
-    return templates.TemplateResponse(
-        "partials/convert_form.html",
-        {
-            "request": request,
-            "dl": dl,
-            "saved": saved,
-            "suggested_output": saved.get("output_file") or default_output,
-        },
-    )
-
-
-@router.post("/{download_id}/save-metadata", response_class=HTMLResponse)
-async def save_metadata(
-    request: Request,
-    download_id: int,
-    title: str = Form(default=""),
-    author: str = Form(default=""),
-    series: str = Form(default=""),
-    series_part: str = Form(default=""),
-    input_path: str = Form(default=""),
-    output_file: str = Form(default=""),
-    db: Session = Depends(get_db),
-):
-    dl = db.query(Download).filter(Download.id == download_id).first()
-    if not dl:
-        return HTMLResponse('<div class="alert alert-danger">Download not found.</div>')
-
-    saved = dl.parsed_metadata
-    saved.update({
-        "title":       title,
-        "author":      author,
-        "series":      series,
-        "series_part": series_part,
-        "input_path":  input_path,
-        "output_file": output_file,
-    })
-    # Clear match_confidence so the next Fetch from Audible uses the new values
-    saved.pop("match_confidence", None)
-    dl.download_metadata = json.dumps(saved, ensure_ascii=False)
-    db.commit()
-
-    m4b_output_path = get_setting(db, "m4b_output_path")
-    safe_title = _sanitize_filename(title or dl.post_title or dl.nzb_name or "output")
-    default_output = os.path.join(m4b_output_path, f"{safe_title}.m4b") if m4b_output_path else f"{safe_title}.m4b"
-
-    return templates.TemplateResponse(
-        "partials/convert_form.html",
-        {
-            "request":        request,
-            "dl":             dl,
-            "saved":          saved,
-            "suggested_output": output_file or default_output,
-            "save_success":   True,
-        },
-    )
-
-
-@router.post("/{download_id}/convert", response_class=HTMLResponse)
-async def start_convert(
-    request: Request,
-    download_id: int,
-    background_tasks: BackgroundTasks,
-    title: str = Form(default=""),
-    author: str = Form(default=""),
-    series: str = Form(default=""),
-    series_part: str = Form(default=""),
-    input_path: str = Form(default=""),
-    output_file: str = Form(default=""),
-    db: Session = Depends(get_db),
-):
-    dl = db.query(Download).filter(Download.id == download_id).first()
-    if not dl:
-        return HTMLResponse('<div class="alert alert-danger">Download not found.</div>')
-    if not input_path:
-        return HTMLResponse('<div class="alert alert-warning">Input path is required.</div>')
-    if not output_file:
-        return HTMLResponse('<div class="alert alert-warning">Output file path is required.</div>')
-
-    # Persist the conversion metadata so retries don't need re-entry
-    dl.download_metadata = json.dumps({
-        "title": title,
-        "author": author,
-        "series": series,
-        "series_part": series_part,
-        "input_path": input_path,
-        "output_file": output_file,
-    }, ensure_ascii=False)
-    dl.m4b_status = "queued"
-    dl.m4b_progress = None
-    db.commit()
-
-    background_tasks.add_task(
-        _queued_conversion,
-        download_id, input_path, output_file, title, author, series, series_part,
-    )
-
-    display_name = title or dl.post_title or dl.nzb_name or f"Download #{download_id}"
-    content = (
-        f'<div class="alert alert-info">'
-        f'<i class="bi bi-arrow-repeat me-2"></i>'
-        f'<strong>{display_name}</strong> is being converted to M4B. '
-        f'Status will update automatically on this page.</div>'
-    )
-    response = HTMLResponse(content)
-    response.headers["HX-Trigger"] = "refreshDownloads"
-    return response
+        return HTMLResponse('<tr><td colspan="6">Not found.</td></tr>')
+    if dl.m4b_status == "converted" and dl.m4b_path:
+        dl.abs_status = "pending"
+        dl.error_message = None
+        db.commit()
+        pipeline.run_soon(pipeline.abs_import, dl.id)
+    return _rows(request, db, [dl])
 
 
 @router.delete("/{download_id}", response_class=HTMLResponse)
-async def delete_download(download_id: int, db: Session = Depends(get_db)):
-    dl = db.query(Download).filter(Download.id == download_id).first()
+def delete_download(download_id: int, db: Session = Depends(get_db)):
+    dl = _get(db, download_id)
     if dl:
+        pipeline.cancel(download_id)
         db.delete(dl)
         db.commit()
     return HTMLResponse("")  # HTMX swaps the row with nothing, removing it
 
 
 @router.get("/{download_id}/conversion-log", response_class=HTMLResponse)
-async def conversion_log(
-    request: Request,
-    download_id: int,
-    db: Session = Depends(get_db),
-):
-    dl = db.query(Download).filter(Download.id == download_id).first()
-    if not dl or not dl.conversion_log:
+def conversion_log(download_id: int, db: Session = Depends(get_db)):
+    dl = _get(db, download_id)
+    if not dl or not (dl.conversion_log or dl.error_message):
         return HTMLResponse('<p class="text-muted small mb-0">No log available.</p>')
-    escaped = dl.conversion_log.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    error = alert_html("danger", dl.error_message, classes="py-2 mb-2") if dl.error_message else ""
+    body = (f'<pre class="bc-raw-text mb-0" style="max-height:300px;overflow-y:auto;font-size:0.75rem;">'
+            f'{escape(dl.conversion_log)}</pre>') if dl.conversion_log else ""
     return HTMLResponse(
-        f'<pre class="bc-raw-text mb-0" style="max-height:300px;overflow-y:auto;font-size:0.75rem;">{escaped}</pre>'
+        '<div class="bc-card"><div class="bc-card-header d-flex align-items-center gap-2">'
+        f'<i class="bi bi-terminal text-accent"></i><span>Log — {escape(dl.display_title)}</span>'
+        '<button type="button" class="btn bc-btn-outline btn-sm ms-auto" '
+        'onclick="document.getElementById(\'convert-panel\').innerHTML=\'\'"><i class="bi bi-x-lg"></i></button>'
+        f'</div><div class="bc-card-body">{error}{body}</div></div>'
     )

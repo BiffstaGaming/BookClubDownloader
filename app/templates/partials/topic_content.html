@@ -36,6 +36,7 @@
             hx-target="#nzb-results"
             hx-swap="innerHTML"
             hx-indicator=".htmx-indicator"
+            {% if auto_search and revealed_posts.get(post.msg_id) %}hx-trigger="submit, load"{% endif %}
           >
             <div class="row g-2 mb-3">
               <div class="col-sm-6">
@@ -105,6 +106,7 @@
             <input type="hidden" name="book_author" value="{{ rev.author or '' }}" />
             <input type="hidden" name="book_series" value="{{ rev.series or '' }}" />
             <input type="hidden" name="book_series_part" value="{{ rev.series_part or '' }}" />
+            <input type="hidden" name="book_narrator" value="{{ rev.narrator or '' }}" />
             <div class="d-flex gap-2 flex-wrap">
               <button type="submit" name="nzb_source" value="nzbking" class="btn bc-btn-primary">
                 <i class="bi bi-search me-1"></i>Search NZBKing

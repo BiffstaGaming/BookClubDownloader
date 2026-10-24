@@ -67,9 +67,10 @@ class NzbgetClient:
         # Base64-encode the NZB content
         b64_content = base64.b64encode(nzb_content).decode("utf-8")
 
-        # Build post-processing parameters for the unpack password
+        # Post-processing parameters, in the documented {"Name", "Value"} form.
+        # An explicit *Unpack:Password overrides any password inside the NZB.
         if password:
-            pp_params = [["*unpack:password", password]]
+            pp_params = [{"Name": "*Unpack:Password", "Value": password}]
         else:
             pp_params = []
 
@@ -90,7 +91,9 @@ class NzbgetClient:
         ]
 
         result = self._rpc("append", params)
-        job_id = int(result)
+        job_id = int(result or 0)
+        if job_id <= 0:
+            raise ValueError("NZBGet rejected the NZB (append returned 0) — check the NZBGet log")
         logger.info("NzbgetClient.add_nzb: added '%s' with job ID %d", safe_name, job_id)
         return job_id
 

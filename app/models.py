@@ -22,18 +22,26 @@ class Download(Base):
     password = Column(String, nullable=True)
     nzb_name = Column(String, nullable=True)
     nzb_hash = Column(String, nullable=True)
+    nzb_source = Column(String, nullable=True)       # "nzbking" or "binsearch" — needed to retry
+    nzb_title = Column(String, nullable=True)        # indexer subject — needed to retry binsearch
     nzbget_id = Column(Integer, nullable=True)
-    status = Column(String, default="sent")
+    status = Column(String, default="sent")          # sent | downloaded | failed
+    error_message = Column(Text, nullable=True)      # human-readable reason for the latest failure
+    missing_polls = Column(Integer, nullable=True)   # consecutive polls where NZBGet had no record
     raw_content = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     # M4B conversion fields
     download_path = Column(Text, nullable=True)
-    download_metadata = Column(Text, nullable=True)  # JSON: title/author/series/paths
+    download_metadata = Column(Text, nullable=True)  # JSON: title/author/series/narrator/asin/paths…
     download_progress = Column(Integer, nullable=True)  # 0-100 while status == "sent"
-    m4b_status = Column(String, nullable=True)
+    m4b_status = Column(String, nullable=True)       # queued | converting | converted | m4b_failed | move_failed
     m4b_progress = Column(Integer, nullable=True)
     m4b_path = Column(Text, nullable=True)
     conversion_log = Column(Text, nullable=True)
+    queued_at = Column(DateTime, nullable=True)      # conversion queue order
+    # Audiobookshelf import fields
+    abs_status = Column(String, nullable=True)       # pending | imported | not_found | failed | skipped
+    abs_item_id = Column(String, nullable=True)
 
     @property
     def parsed_metadata(self) -> dict:
@@ -44,6 +52,14 @@ class Download(Base):
             except Exception:
                 pass
         return {}
+
+    def set_metadata(self, data: dict):
+        self.download_metadata = json.dumps(data, ensure_ascii=False)
+
+    @property
+    def display_title(self) -> str:
+        meta = self.parsed_metadata
+        return meta.get("title") or self.post_title or self.nzb_name or f"Download #{self.id}"
 
 
 class LogEntry(Base):
