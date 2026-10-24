@@ -27,7 +27,7 @@ from app.services import library, notify
 from app.services.abs import AbsClient
 from app.services.matching import normalize, parse_nzb_name, rank_candidates
 from app.services.nzbget import NzbgetClient
-from app.settings_store import get_bool, get_int, get_setting
+from app.settings_store import get_bool, get_int, get_setting, set_setting
 
 logger = logging.getLogger(__name__)
 
@@ -152,9 +152,22 @@ class Pipeline:
             self.loop.call_soon_threadsafe(lambda: self.spawn(coro_fn(*args)))
 
     def recover(self):
-        """A restart kills any running m4b-tool — put those books back in the queue."""
+        """
+        A restart kills any running m4b-tool — put those books back in the queue.
+        On the first start after upgrading, mark existing downloads as already
+        handled so they aren't suddenly auto-converted (and their sources deleted).
+        """
         db = SessionLocal()
         try:
+            if get_setting(db, "pipeline_upgraded") != "1":
+                old = db.query(Download).filter(Download.status == "downloaded", Download.m4b_status.is_(None)).all()
+                for dl in old:
+                    meta = dl.parsed_metadata
+                    meta["auto_processed"] = True
+                    dl.set_metadata(meta)
+                set_setting(db, "pipeline_upgraded", "1")
+                if old:
+                    log_to_db("INFO", "pipeline", f"Upgrade: {len(old)} earlier download(s) left for manual conversion")
             stuck = db.query(Download).filter(Download.m4b_status == "converting").all()
             for dl in stuck:
                 dl.m4b_status = "queued"
@@ -169,17 +182,18 @@ class Pipeline:
     # ── NZBGet poller ─────────────────────────────────────────────────────────
     async def _poll_loop(self):
         while True:
+            interval = 15
             try:
                 await self.poll_once()
+                db = SessionLocal()
+                try:
+                    interval = max(5, get_int(db, "poll_interval", 15))
+                finally:
+                    db.close()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.exception("Poller error: %s", exc)
-            db = SessionLocal()
-            try:
-                interval = max(5, get_int(db, "poll_interval", 15))
-            finally:
-                db.close()
             await asyncio.sleep(interval)
 
     async def poll_once(self):
@@ -384,21 +398,27 @@ class Pipeline:
     # ── conversion worker ─────────────────────────────────────────────────────
     async def _worker_loop(self):
         while True:
-            dl_id = self._next_queued()
-            if dl_id is None:
-                self.wake.clear()
-                try:
-                    await asyncio.wait_for(self.wake.wait(), timeout=30)
-                except asyncio.TimeoutError:
-                    pass
-                continue
+            dl_id = None
             try:
+                dl_id = self._next_queued()
+                if dl_id is None:
+                    self.wake.clear()
+                    try:
+                        await asyncio.wait_for(self.wake.wait(), timeout=30)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
                 await self.convert(dl_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.exception("Conversion crashed for #%s", dl_id)
-                await self._fail(dl_id, "m4b_failed", f"Unexpected error: {exc}")
+                logger.exception("Conversion worker error (download #%s): %s", dl_id, exc)
+                if dl_id is not None:
+                    try:
+                        await self._fail(dl_id, "m4b_failed", f"Unexpected error: {exc}")
+                    except Exception:
+                        logger.exception("Could not record the failure for #%s", dl_id)
+                await asyncio.sleep(5)
 
     def _next_queued(self) -> int | None:
         db = SessionLocal()
@@ -430,11 +450,32 @@ class Pipeline:
         await notify.send_event("conversion_failed", title=title, download_id=dl_id, message=message)
 
     def cancel(self, dl_id: int) -> bool:
-        """Stop a running conversion. Returns False if it isn't the one running."""
-        if self.current_id != dl_id or not self.current_proc:
+        """
+        Stop the conversion of `dl_id` if it is the one running (before or during
+        m4b-tool). Returns False if it isn't running or is already being filed.
+        """
+        if self.current_id != dl_id:
             return False
         self.cancelled.add(dl_id)
         self._kill_current()
+        return True
+
+    async def _stop_if_cancelled(self, dl_id: int) -> bool:
+        """Finish a cancelled conversion: leave the row reset and report True."""
+        if dl_id not in self.cancelled:
+            return False
+        self.cancelled.discard(dl_id)
+        db = SessionLocal()
+        try:
+            dl = db.query(Download).filter(Download.id == dl_id).first()
+            if dl and dl.m4b_status == "converting":
+                dl.m4b_status = None
+                dl.m4b_progress = None
+                dl.error_message = "Conversion stopped"
+                db.commit()
+        finally:
+            db.close()
+        log_to_db("INFO", "conversion", f"#{dl_id}: conversion stopped", download_id=dl_id)
         return True
 
     def _kill_current(self):
@@ -457,12 +498,15 @@ class Pipeline:
                 return
             meta = dl.parsed_metadata
             input_path = meta.get("input_path") or dl.download_path or ""
+            nzbget_folder = dl.download_path or ""
             output_root = get_setting(db, "m4b_output_path")
             move_template = get_setting(db, "m4b_move_template")
             jobs = get_setting(db, "m4b_jobs")
             bitrate = get_setting(db, "m4b_bitrate")
             delete_source = get_bool(db, "delete_source")
             roots = download_roots(db)
+            self.cancelled.discard(dl_id)
+            self.current_id = dl_id  # before the commit, so Stop works from the first moment
             dl.m4b_status = "converting"
             dl.m4b_progress = None
             dl.error_message = None
@@ -472,11 +516,10 @@ class Pipeline:
         finally:
             db.close()
 
-        self.current_id = dl_id
         work_dir = os.path.join(output_root, ".bookclub-work", str(dl_id))
         keep_work_dir = False
         try:
-            problem = check_input_folder(input_path)
+            problem = await asyncio.to_thread(check_input_folder, input_path)
             if problem:
                 await self._fail(dl_id, "m4b_failed", problem)
                 return
@@ -487,41 +530,33 @@ class Pipeline:
                            f"A book already exists at {final_path} — delete it or change the title/series first")
                 return
 
-            shutil.rmtree(work_dir, ignore_errors=True)
+            await asyncio.to_thread(shutil.rmtree, work_dir, True)
             os.makedirs(work_dir, exist_ok=True)
             work_file = os.path.join(work_dir, os.path.basename(final_path))
 
-            cover = library.find_cover_image(input_path)
+            cover = await asyncio.to_thread(library.find_cover_image, input_path)
             if not cover and meta.get("cover_url"):
                 downloaded = os.path.join(work_dir, "cover.jpg")
                 if await asyncio.to_thread(library.download_cover, meta["cover_url"], downloaded):
                     cover = downloaded
 
-            audio = library.find_audio_files(input_path)
+            audio = await asyncio.to_thread(library.find_audio_files, input_path)
             log_to_db("INFO", "conversion", f"#{dl_id}: converting {len(audio)} audio file(s) from {input_path}",
                       download_id=dl_id)
+            if await self._stop_if_cancelled(dl_id):
+                return
             if len(audio) == 1 and audio[0].lower().endswith((".m4b", ".m4a", ".mp4")):
                 # Already a single AAC file — copy it (the source stays intact until the end) and tag it.
                 await asyncio.to_thread(shutil.copy2, audio[0], work_file)
+                if await self._stop_if_cancelled(dl_id):
+                    return
                 returncode, log = await self._run(dl_id, tone_command(work_file, meta, cover))
             else:
                 returncode, log = await self._run(
                     dl_id, merge_command(input_path, work_file, meta, cover, jobs, bitrate))
             log_to_db("DEBUG", "conversion", f"#{dl_id} tool output:\n{log[-20000:]}", download_id=dl_id)
 
-            if dl_id in self.cancelled:
-                self.cancelled.discard(dl_id)
-                db = SessionLocal()
-                try:
-                    dl = db.query(Download).filter(Download.id == dl_id).first()
-                    if dl:
-                        dl.m4b_status = None
-                        dl.m4b_progress = None
-                        dl.error_message = "Conversion cancelled"
-                        db.commit()
-                finally:
-                    db.close()
-                log_to_db("INFO", "conversion", f"#{dl_id}: conversion cancelled", download_id=dl_id)
+            if await self._stop_if_cancelled(dl_id):
                 return
 
             if returncode != 0 or not os.path.isfile(work_file) or os.path.getsize(work_file) == 0:
@@ -533,6 +568,10 @@ class Pipeline:
 
             # Move into the library. Never overwrite an existing book.
             book_dir = os.path.dirname(final_path)
+            if await self._stop_if_cancelled(dl_id):
+                return
+            # From here the book goes into the library; a late Stop no longer undoes it.
+            self.current_id = None
             try:
                 os.makedirs(book_dir, exist_ok=True)
                 if os.path.exists(final_path):
@@ -545,16 +584,22 @@ class Pipeline:
                 return
 
             try:
-                library.write_abs_metadata(book_dir, meta)
+                await asyncio.to_thread(library.write_abs_metadata, book_dir, meta)
                 if cover and not os.path.exists(os.path.join(book_dir, "cover.jpg")):
-                    shutil.copyfile(cover, os.path.join(book_dir, "cover" + (os.path.splitext(cover)[1].lower() or ".jpg")))
+                    await asyncio.to_thread(
+                        shutil.copyfile, cover,
+                        os.path.join(book_dir, "cover" + (os.path.splitext(cover)[1].lower() or ".jpg")))
             except Exception as exc:
                 log_to_db("WARNING", "conversion", f"#{dl_id}: could not write metadata.json/cover: {exc}", download_id=dl_id)
 
-            if delete_source:
+            if delete_source and not is_download_folder(input_path, nzbget_folder):
+                log_to_db("INFO", "conversion",
+                          f"#{dl_id}: source {input_path} is not the folder NZBGet created for this download — left in place",
+                          download_id=dl_id)
+            elif delete_source:
                 try:
-                    deleted, reason = library.safe_delete_source(
-                        input_path, roots, protected=[output_root, book_dir])
+                    deleted, reason = await asyncio.to_thread(
+                        library.safe_delete_source, input_path, roots, [output_root, book_dir])
                     log_to_db("INFO" if deleted else "WARNING", "conversion",
                               f"#{dl_id}: source folder {input_path}: {reason}", download_id=dl_id)
                 except Exception as exc:
@@ -580,8 +625,9 @@ class Pipeline:
         finally:
             self.current_id = None
             self.current_proc = None
+            self.cancelled.discard(dl_id)
             if not keep_work_dir:
-                shutil.rmtree(work_dir, ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, work_dir, True)
 
     async def _run(self, dl_id: int, cmd: list[str]) -> tuple[int, str]:
         """Run a tool, streaming output so progress percentages reach the UI."""
@@ -747,6 +793,17 @@ def check_input_folder(path: str) -> str:
     if not library.find_audio_files(path):
         return f"No audio files found in {path}"
     return ""
+
+
+def is_download_folder(input_path: str, nzbget_folder: str) -> bool:
+    """
+    Only the folder NZBGet produced for this download (or a sub-folder of it) may
+    be deleted — never a parent folder someone typed into the convert form.
+    """
+    if not input_path or not nzbget_folder:
+        return False
+    same = os.path.normcase(os.path.realpath(input_path)) == os.path.normcase(os.path.realpath(nzbget_folder))
+    return same or library.is_within(input_path, nzbget_folder)
 
 
 def enqueue(dl: Download):

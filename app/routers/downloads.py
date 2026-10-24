@@ -389,24 +389,41 @@ def _save_form(dl: Download, form: dict) -> dict:
     return meta
 
 
+def _book_form(
+    title: str = Form(default=""),
+    author: str = Form(default=""),
+    narrator: str = Form(default=""),
+    series: str = Form(default=""),
+    series_part: str = Form(default=""),
+    year: str = Form(default=""),
+    asin: str = Form(default=""),
+    input_path: str = Form(default=""),
+) -> dict:
+    return {"title": title, "author": author, "narrator": narrator, "series": series,
+            "series_part": series_part, "year": year, "asin": asin, "input_path": input_path}
+
+
+# Plain `def`: these walk the input folder on disk, which can be slow on a NAS.
 @router.post("/{download_id}/save-metadata", response_class=HTMLResponse)
-async def save_metadata(request: Request, download_id: int, db: Session = Depends(get_db)):
+def save_metadata(request: Request, download_id: int, form: dict = Depends(_book_form),
+                  db: Session = Depends(get_db)):
     dl = _get(db, download_id)
     if not dl:
         return alert("danger", "Download not found.")
-    _save_form(dl, dict(await request.form()))
+    _save_form(dl, form)
     db.commit()
     return _convert_form(request, db, dl, save_success="Saved.")
 
 
 @router.post("/{download_id}/convert", response_class=HTMLResponse)
-async def start_convert(request: Request, download_id: int, db: Session = Depends(get_db)):
+def start_convert(request: Request, download_id: int, form: dict = Depends(_book_form),
+                  db: Session = Depends(get_db)):
     dl = _get(db, download_id)
     if not dl:
         return alert("danger", "Download not found.")
     if dl.m4b_status == "converting":
         return alert("warning", "This book is already converting.")
-    meta = _save_form(dl, dict(await request.form()))
+    meta = _save_form(dl, form)
     db.commit()
     problem = check_input_folder(meta.get("input_path") or dl.download_path or "")
     if problem:

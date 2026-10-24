@@ -237,6 +237,22 @@ def test_convert_keeps_source_outside_download_roots(db, settings, tmp_path, mon
     assert src.exists()
 
 
+def test_convert_never_deletes_a_parent_folder_typed_into_the_form(db, settings, tmp_path, monkeypatch):
+    dl_id, src, _ = _converted_setup(db, settings, tmp_path)
+    sibling = src.parent / "Another Book"
+    sibling.mkdir()
+    (sibling / "keep.mp3").write_bytes(b"x")
+    dl = db.get(Download, dl_id)
+    meta = dl.parsed_metadata
+    meta["input_path"] = str(src.parent)  # the whole downloads folder, not this book's folder
+    dl.set_metadata(meta)
+    db.commit()
+    monkeypatch.setattr(Pipeline, "_run", fake_run_success([]))
+    run(Pipeline().convert(dl_id))
+    assert reload(db, dl_id).m4b_status == "converted"
+    assert sibling.exists() and src.exists()
+
+
 def test_convert_failure_keeps_source(db, settings, tmp_path, monkeypatch):
     dl_id, src, _ = _converted_setup(db, settings, tmp_path)
 
@@ -319,3 +335,56 @@ def test_abs_import_not_found(db, settings):
     dl = reload(db, dl_id)
     assert dl.abs_status == "not_found" and "path mapping" in dl.error_message
     assert ("scan",) in FakeAbs.calls  # fell back to a full library scan
+
+
+def test_upgrade_marks_old_downloads_as_handled(db, settings):
+    old = make_download(db, status="downloaded", download_metadata=json.dumps({"title": "Old"}))
+    Pipeline().recover()
+    assert reload(db, old).parsed_metadata["auto_processed"] is True
+    # Only once: later downloads are auto-processed normally
+    new = make_download(db, status="downloaded")
+    Pipeline().recover()
+    assert "auto_processed" not in reload(db, new).parsed_metadata
+
+
+def test_stop_before_the_tool_starts(db, settings, tmp_path, monkeypatch):
+    dl_id, src, _ = _converted_setup(db, settings, tmp_path)
+    p = Pipeline()
+    calls = []
+    original_find = pl.library.find_audio_files
+
+    def find_and_stop(path):
+        p.cancel(dl_id)  # user presses Stop while the folder is being scanned
+        return original_find(path)
+    monkeypatch.setattr(pl.library, "find_audio_files", find_and_stop)
+    monkeypatch.setattr(Pipeline, "_run", fake_run_success(calls))
+    run(p.convert(dl_id))
+    dl = reload(db, dl_id)
+    assert not calls and dl.m4b_status is None and dl.error_message == "Conversion stopped"
+    assert src.exists()
+
+
+def test_late_stop_does_not_poison_the_next_run(db, settings, tmp_path, monkeypatch):
+    dl_id, _, _ = _converted_setup(db, settings, tmp_path)
+    p = Pipeline()
+    monkeypatch.setattr(Pipeline, "_run", fake_run_success([]))
+    run(p.convert(dl_id))
+    assert p.cancel(dl_id) is False  # finished — nothing to stop
+    assert dl_id not in p.cancelled
+
+
+def test_worker_survives_errors(db, monkeypatch):
+    p = Pipeline()
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is locked")
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(p, "_next_queued", flaky)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(pl.asyncio, "sleep", lambda s: real_sleep(0))
+    with pytest.raises(asyncio.CancelledError):
+        run(p._worker_loop())
+    assert calls["n"] == 2

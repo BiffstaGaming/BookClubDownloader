@@ -168,3 +168,15 @@ def test_pipeline_find_duplicates_against_abs(db, settings, monkeypatch):
     reasons = pl.find_duplicates(db, "Dune", "Frank Herbert")
     assert reasons and "Audiobookshelf" in reasons[0]
     assert pl.find_duplicates(db, "Dune Messiah", "Frank Herbert") == []
+
+
+def test_health_reports_dead_background_task(client, monkeypatch):
+    class Done:
+        def done(self):
+            return True
+
+        def get_name(self):
+            return "bookclub-worker"
+    monkeypatch.setattr(pl.pipeline, "tasks", [Done()])
+    r = client.get("/api/health")
+    assert r.status_code == 503 and r.json()["stopped"] == ["bookclub-worker"]

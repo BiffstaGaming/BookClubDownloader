@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -14,9 +15,11 @@ router = APIRouter()
 
 @router.get("/health")
 def health(db: Session = Depends(get_db)):
+    """503 when the database is unreachable or a background task has died (Docker marks it unhealthy)."""
     db.query(func.count(Download.id)).scalar()
-    workers_alive = bool(pipeline.tasks) and all(not t.done() for t in pipeline.tasks)
-    return {"status": "ok" if workers_alive or not pipeline.tasks else "degraded", "pipeline": workers_alive}
+    dead = [t.get_name() for t in pipeline.tasks if t.done()]
+    body = {"status": "degraded" if dead else "ok", "pipeline": bool(pipeline.tasks) and not dead, "stopped": dead}
+    return JSONResponse(body, status_code=503 if dead else 200)
 
 
 @router.get("/status")
