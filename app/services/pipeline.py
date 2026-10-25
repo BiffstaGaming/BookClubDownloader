@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 from datetime import datetime, timedelta
 
 from sqlalchemy import or_
@@ -570,7 +571,11 @@ class Pipeline:
                 reason = f"m4b-tool exited with code {returncode}" if returncode else "no output file was produced"
                 if "no files to convert" in log.lower():
                     reason = "m4b-tool found no audio files to convert"
-                await self._fail(dl_id, "m4b_failed", f"Conversion failed: {reason} — see the log", log=log)
+                # m4b-tool only says "could not convert X"; find out why from ffmpeg itself.
+                diagnosis, summary = await asyncio.to_thread(diagnose_failure, log, work_dir)
+                log_to_db("WARNING", "conversion", f"#{dl_id} diagnosis:\n{diagnosis}", download_id=dl_id)
+                await self._fail(dl_id, "m4b_failed", f"Conversion failed: {reason}{summary} — see the log",
+                                 log=f"{log}\n\n--- BookClub diagnosis ---\n{diagnosis}")
                 return
 
             # Move into the library. Never overwrite an existing book.
@@ -789,6 +794,52 @@ def find_library_item(client: AbsClient, library_id: str, title: str, asin: str,
         if depth and _path_tail(item.get("path"), depth) == _path_tail(local_dir, depth):
             return item
     return None
+
+
+def diagnose_failure(log: str, work_dir: str) -> tuple[str, str]:
+    """
+    Explain a failed m4b-tool run: free space in the working folder, and for the
+    first file m4b-tool "could not convert", the file name's raw bytes and
+    ffmpeg's own error when decoding it. Returns (full text, short summary).
+    """
+    lines, summary = [], ""
+    try:
+        free = shutil.disk_usage(work_dir if os.path.isdir(work_dir) else os.path.dirname(work_dir) or "/").free
+        lines.append(f"Free space in the working folder: {free / 1024 ** 3:.1f} GB")
+        if free < 2 * 1024 ** 3:
+            summary = f"; only {free / 1024 ** 3:.1f} GB free in the working folder"
+    except OSError as exc:
+        lines.append(f"Could not check free space: {exc}")
+
+    # Anchor on the work folder: file names may themselves contain " to ".
+    anchor = "".join(r"[\\/]" if ch in "/\\" else re.escape(ch) for ch in work_dir.rstrip("/\\"))
+    match = re.search(r"could not convert (.+) to " + anchor, log)
+    if not match:
+        return "\n".join(lines), summary
+    source = match.group(1).strip()
+    lines.append(f"First file that failed: {source}")
+    if any(ord(ch) > 127 for ch in source):
+        lines.append(f"Raw file name bytes: {os.fsencode(os.path.basename(source))!r}")
+    if not os.path.isfile(source):
+        lines.append("That file no longer exists at that path.")
+        return "\n".join(lines), summary or "; the failing file is missing"
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-i", source, "-f", "null", "-"],
+            capture_output=True, text=True, errors="replace", timeout=600,
+        )
+        errors = (result.stderr or "").strip()
+        if result.returncode != 0 or errors:
+            first = errors.splitlines()[0] if errors else f"exit code {result.returncode}"
+            lines.append(f"ffmpeg cannot decode it (exit {result.returncode}):\n{errors[-1500:]}")
+            summary = summary or f"; ffmpeg: {first[:160]}"
+        else:
+            lines.append("ffmpeg decodes this file without errors, so the file itself is fine.")
+    except FileNotFoundError:
+        lines.append("ffmpeg is not installed here, so the file could not be checked.")
+    except subprocess.TimeoutExpired:
+        lines.append("ffmpeg took more than 10 minutes to check the file.")
+    return "\n".join(lines), summary
 
 
 def check_input_folder(path: str) -> str:

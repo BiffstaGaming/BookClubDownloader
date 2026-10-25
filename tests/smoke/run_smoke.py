@@ -144,6 +144,17 @@ dl3 = convert(meta, dup_src)
 check(dl3.m4b_status == "m4b_failed" and "already exists" in (dl3.error_message or ""), "existing book is not overwritten")
 check(os.path.isdir(dup_src), "source kept when nothing was converted")
 
+# ── 4. (informational) non-ASCII file names, as in Stephen King's It ─────────
+# Reported only — it must not block publishing while the cause is investigated.
+accents_src = f"{DOWNLOADS}/Accents"
+make_book(accents_src, 2)
+os.rename(f"{accents_src}/01 - Chapter 1.mp3", f"{accents_src}/01 - The Ritual of Chüd.mp3")
+os.rename(f"{accents_src}/02 - Chapter 2.mp3", f"{accents_src}/02 - The Ritual of ChÃ¼d.mp3")
+dl4 = convert({"title": "Accents Book", "author": "Test Author"}, accents_src)
+print(f"INFO non-ASCII file names: status={dl4.m4b_status} error={dl4.error_message}")
+if dl4.m4b_status != "converted":
+    print(dl4.conversion_log)
+
 print()
 if failures:
     print(f"{len(failures)} check(s) failed:")

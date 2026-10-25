@@ -296,6 +296,34 @@ class AbookScraper:
     # Private helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _pick_search_and_password(codes: list[tuple[str, str]]) -> tuple[str, str]:
+        """
+        Choose the NZB search term and archive password from the post's code
+        boxes. Posts label them, e.g. "Search:" + "Password:", or
+        "M4B Search:" + "MP3 Search:" + "EPUB Search:" + "Password:".
+        Prefers the M4B search (already a single audiobook file), then a plain
+        "Search", then MP3; never an EPUB. Falls back to box order
+        (1st = search, 2nd = password) when the boxes are unlabelled.
+        """
+        password = next((text for label, text in codes if "pass" in label), "")
+        searches = [(label, text) for label, text in codes if "search" in label and "epub" not in label]
+        search_term = ""
+        for wanted in ("m4b", "", "mp3"):
+            match = next((text for label, text in searches
+                          if (wanted and wanted in label) or (not wanted and "mp3" not in label and "m4b" not in label)),
+                         "")
+            if match:
+                search_term = match
+                break
+        if not search_term and not password:
+            texts = [text for _, text in codes]
+            search_term = texts[0] if texts else ""
+            password = texts[1] if len(texts) > 1 else ""
+        elif not search_term:
+            search_term = next((text for label, text in codes if "pass" not in label and "epub" not in label), "")
+        return search_term, password
+
     def _parse_unhiddenbox(self, unhiddenbox) -> dict:
         """
         Extract search_term, password, and structured book metadata from
@@ -314,9 +342,7 @@ class AbookScraper:
         raw_debug = unhiddenbox.get_text(separator="\n")
         logger.debug("_parse_unhiddenbox raw text:\n%s", raw_debug)
 
-        codes = unhiddenbox.find_all("code", class_="bbc_code")
-        search_term = codes[0].get_text(strip=True) if len(codes) > 0 else ""
-        password = codes[1].get_text(strip=True) if len(codes) > 1 else ""
+        search_term, password = self._pick_search_and_password(_labelled_codes(unhiddenbox))
         # Strip leading "PW - " prefix from search term
         search_term = re.sub(r"^PW\s*-\s*", "", search_term).strip()
 
@@ -406,3 +432,26 @@ def get_scraper(base_url: str, username: str, password: str) -> "AbookScraper":
             scraper = AbookScraper(base_url, username, password)
             _cached[key] = scraper
         return scraper
+
+
+_CODE_CHROME = {"code", "code:", "[copy]", "copy", "[select]", "select", "select all"}
+
+
+def _code_label(code_tag) -> str:
+    """
+    The label written before a code box, lower-cased without the colon —
+    e.g. "m4b search" or "password". Walks back over the box's own header
+    ("Code:", "[Copy]") to the nearest text ending in ":".
+    """
+    for text in code_tag.find_all_previous(string=True, limit=12):
+        line = text.strip()
+        if not line or line.lower() in _CODE_CHROME:
+            continue
+        match = re.search(r"([A-Za-z0-9][A-Za-z0-9 ]{0,30}?)\s*:\s*$", line)
+        return match.group(1).strip().lower() if match else ""
+    return ""
+
+
+def _labelled_codes(unhiddenbox) -> list[tuple[str, str]]:
+    return [(_code_label(code), code.get_text(strip=True))
+            for code in unhiddenbox.find_all("code", class_="bbc_code")]

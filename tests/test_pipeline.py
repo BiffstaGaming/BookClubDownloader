@@ -417,3 +417,39 @@ def test_auto_process_does_not_convert_foreign_only_match(db, settings, tmp_path
     run(Pipeline().auto_process(dl_id))
     dl = reload(db, dl_id)
     assert dl.m4b_status is None and dl.parsed_metadata["language_mismatch"] is True
+
+
+def test_failed_conversion_logs_ffmpeg_error_and_free_space(db, settings, tmp_path, monkeypatch):
+    dl_id, src, _ = _converted_setup(db, settings, tmp_path)
+    bad = src / "38. The Ritual of Chüd _ 19 _ Welcome to Derry.mp3"
+    bad.write_bytes(b"x")
+    work_dir = tmp_path / "m4b" / ".bookclub-work" / str(dl_id)
+
+    async def m4b_tool_fails(self, dl_id, cmd):
+        return 1, f"could not convert {bad} to {work_dir}/It-tmpfiles/39-finished.m4b"
+    monkeypatch.setattr(Pipeline, "_run", m4b_tool_fails)
+
+    class Ran:
+        returncode, stderr = 1, "[mp3 @ 0x1] Header missing\nError while decoding stream #0:0: Invalid data found"
+    calls = []
+    monkeypatch.setattr(pl.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or Ran())
+
+    run(Pipeline().convert(dl_id))
+    dl = reload(db, dl_id)
+    assert dl.m4b_status == "m4b_failed"
+    assert "ffmpeg: [mp3 @ 0x1] Header missing" in dl.error_message
+    assert calls and calls[0][calls[0].index("-i") + 1] == str(bad)
+    assert "Free space in the working folder" in dl.conversion_log
+    assert "Raw file name bytes" in dl.conversion_log and "Header missing" in dl.conversion_log
+
+
+def test_diagnosis_when_file_decodes_fine(tmp_path, monkeypatch):
+    f = tmp_path / "ok.mp3"
+    f.write_bytes(b"x")
+
+    class Ran:
+        returncode, stderr = 0, ""
+    monkeypatch.setattr(pl.subprocess, "run", lambda cmd, **kw: Ran())
+    text, summary = pl.diagnose_failure(f"could not convert {f} to {tmp_path}/work/x-tmpfiles/1.m4b",
+                                        str(tmp_path / "work"))
+    assert "decodes this file without errors" in text and "ffmpeg" not in summary
