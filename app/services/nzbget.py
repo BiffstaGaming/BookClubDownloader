@@ -1,4 +1,5 @@
 import base64
+import json
 import logging
 import requests
 
@@ -24,9 +25,12 @@ class NzbgetClient:
             "params": params,
         }
         try:
+            # Raw UTF-8 rather than \uXXXX escapes: NZBGet does not unescape
+            # post-processing parameter values (e.g. the unpack password).
             response = requests.post(
                 url,
-                json=payload,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json; charset=utf-8"},
                 auth=(self.username, self.password),
                 timeout=30,
             )
@@ -67,10 +71,18 @@ class NzbgetClient:
         # Base64-encode the NZB content
         b64_content = base64.b64encode(nzb_content).decode("utf-8")
 
-        # Post-processing parameters, in the documented {"Name", "Value"} form.
+        # Post-processing parameters exactly as NZBGet's own web UI sends them
+        # (webui/upload.js): [{"*Unpack:Password": password}]. NZBGet's JSON-RPC
+        # parser reads strings pairwise as name, value — keys included — so the
+        # {"Name": ..., "Value": ...} form from the API docs would set parameters
+        # called "Name" and "Value" and the password would never be used.
         # An explicit *Unpack:Password overrides any password inside the NZB.
         if password:
-            pp_params = [{"Name": "*Unpack:Password", "Value": password}]
+            pp_params = [{"*Unpack:Password": password}]
+            if '"' in password or "\\" in password:
+                logger.warning(
+                    "Password for '%s' contains \" or \\ — NZBGet receives these JSON-escaped and may "
+                    "fail to unpack; if so, set the password manually in NZBGet", name)
         else:
             pp_params = []
 
