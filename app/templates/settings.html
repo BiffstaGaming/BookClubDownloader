@@ -388,7 +388,7 @@
           </div>
 
           <div class="row g-3">
-            <div class="col-sm-4">
+            <div class="col-sm-3">
               <label for="audible_provider" class="form-label bc-label">Audible Region</label>
               <select class="form-select bc-input" id="audible_provider" name="audible_provider">
                 {% for value, label in audible_providers %}
@@ -396,7 +396,17 @@
                 {% endfor %}
               </select>
             </div>
-            <div class="col-sm-4">
+            <div class="col-sm-3">
+              <label for="preferred_language" class="form-label bc-label">Book Language</label>
+              <select class="form-select bc-input" id="preferred_language" name="preferred_language">
+                {% set current_language = settings.get('preferred_language') %}
+                {% for language in languages %}
+                <option value="{{ language }}" {% if current_language == language %}selected{% endif %}>{{ language }}</option>
+                {% endfor %}
+                <option value="any" {% if current_language == 'any' %}selected{% endif %}>Any language</option>
+              </select>
+            </div>
+            <div class="col-sm-3">
               <label for="auto_match_threshold" class="form-label bc-label">Auto-convert confidence</label>
               <div class="input-group">
                 <input type="number" class="form-control bc-input" id="auto_match_threshold" name="auto_match_threshold"
@@ -404,7 +414,7 @@
                 <span class="input-group-text bc-input-addon">%</span>
               </div>
             </div>
-            <div class="col-sm-4 d-flex align-items-end">
+            <div class="col-sm-3 d-flex align-items-end">
               <div class="form-check form-switch mb-2">
                 <input class="form-check-input" type="checkbox" role="switch" id="auto_convert" name="auto_convert" value="1"
                        {% if settings.get('auto_convert') == '1' %}checked{% endif %} />
@@ -414,7 +424,8 @@
           </div>
           <div class="form-text text-muted">
             When a download finishes, the best Audible match at or above this confidence is converted without asking.
-            Anything lower waits on the Downloads page for you to pick the right match.
+            Anything lower waits on the Downloads page for you to pick the right match. Editions in a language other
+            than the book language are scored down so a translated edition with the same title is never picked.
           </div>
         </div>
       </div>

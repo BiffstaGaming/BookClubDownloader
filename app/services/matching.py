@@ -96,12 +96,47 @@ def audible_fields(book: dict) -> dict:
     }
 
 
-def rank_candidates(results: list, title: str, author: str = "", limit: int = 8) -> list[dict]:
-    """Normalised candidates, best first, each with a `confidence` score."""
+# Foreign-language editions often keep the original title, so title/author alone
+# can score them 100%. A known language that differs from the preferred one loses
+# this much and is capped below any auto-convert threshold.
+LANGUAGE_MISMATCH_PENALTY = 40
+LANGUAGE_MISMATCH_CAP = 60
+
+_LANGUAGE_CODES = {
+    "en": "english", "de": "german", "fr": "french", "es": "spanish", "it": "italian",
+    "nl": "dutch", "pt": "portuguese", "sv": "swedish", "da": "danish", "no": "norwegian",
+    "nb": "norwegian", "fi": "finnish", "pl": "polish", "ja": "japanese",
+}
+
+
+def normalize_language(language: str) -> str:
+    lang = (language or "").strip().lower()
+    return _LANGUAGE_CODES.get(lang, lang)
+
+
+def language_mismatch(candidate_language: str, preferred_language: str) -> bool:
+    """True when both languages are known and differ ("any" = no preference)."""
+    preferred = normalize_language(preferred_language)
+    candidate = normalize_language(candidate_language)
+    return bool(preferred and preferred != "any" and candidate and candidate != preferred)
+
+
+def rank_candidates(results: list, title: str, author: str = "", limit: int = 8,
+                    preferred_language: str = "") -> list[dict]:
+    """
+    Normalised candidates, best first, each with a `confidence` score.
+    Editions in a language other than `preferred_language` are scored down
+    (and flagged `language_mismatch`) so they sort below — and never auto-convert
+    ahead of — an edition in the right language.
+    """
     ranked = []
-    for book in results[: max(limit, 10)]:
+    for book in results[:25]:
         fields = audible_fields(book)
-        fields["confidence"] = compute_confidence(title, author, fields["title"], fields["author"])
+        confidence = compute_confidence(title, author, fields["title"], fields["author"])
+        fields["language_mismatch"] = language_mismatch(fields["language"], preferred_language)
+        if fields["language_mismatch"]:
+            confidence = max(0, min(confidence - LANGUAGE_MISMATCH_PENALTY, LANGUAGE_MISMATCH_CAP))
+        fields["confidence"] = confidence
         ranked.append(fields)
     ranked.sort(key=lambda c: c["confidence"], reverse=True)
     return ranked[:limit]

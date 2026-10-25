@@ -12,7 +12,7 @@ from app.services import library, notify
 from app.services.abs import AbsClient
 from app.services.nzbget import NzbgetClient
 from app.settings_store import (  # noqa: F401 — get_setting/set_setting re-exported for older imports
-    AUDIBLE_PROVIDERS, BOOL_KEYS, SECRET_KEYS, SETTING_KEYS, all_settings, get_setting, set_setting,
+    AUDIBLE_PROVIDERS, BOOL_KEYS, LANGUAGES, SECRET_KEYS, SETTING_KEYS, all_settings, get_setting, set_setting,
 )
 from app.ui import alert
 from app.templating import templates
@@ -33,6 +33,7 @@ def _render(request: Request, db: Session, message: str = None, message_type: st
             "settings": current,
             "secret_set": secret_set,
             "audible_providers": AUDIBLE_PROVIDERS,
+            "languages": LANGUAGES,
             "message": message,
             "message_type": message_type,
         },

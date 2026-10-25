@@ -62,6 +62,7 @@
           </button>
           {{ confidence_badge(saved.get('match_confidence')) }}
           {% if saved.get('asin') %}<span class="text-muted small">ASIN <code class="bc-code">{{ saved.get('asin') }}</code></span>{% endif %}
+          {% if saved.get('language') %}<span class="small {{ 'text-warning fw-semibold' if saved.get('language_mismatch') else 'text-muted' }}"><i class="bi bi-translate me-1"></i>{{ saved.get('language')|capitalize }}</span>{% endif %}
         </div>
         {% if saved.get('description') %}
         <div class="text-muted small bc-description">{{ saved.get('description')[:400] }}{% if saved.get('description')|length > 400 %}…{% endif %}</div>

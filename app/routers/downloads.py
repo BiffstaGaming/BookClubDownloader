@@ -338,7 +338,8 @@ def metadata_lookup(
         logger.warning("metadata_lookup failed for download %d: %s", download_id, exc)
         return _convert_form(request, db, dl, lookup_error=f"Lookup failed: {exc}")
 
-    candidates = rank_candidates(results, query_title, query_author)
+    preferred_language = get_setting(db, "preferred_language")
+    candidates = rank_candidates(results, query_title, query_author, preferred_language=preferred_language)
     return templates.TemplateResponse(
         "partials/match_picker.html",
         {
@@ -349,6 +350,7 @@ def metadata_lookup(
             "query_author": query_author,
             "provider": provider,
             "providers": AUDIBLE_PROVIDERS,
+            "preferred_language": preferred_language,
         },
     )
 

@@ -388,3 +388,32 @@ def test_worker_survives_errors(db, monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         run(p._worker_loop())
     assert calls["n"] == 2
+
+
+def test_auto_process_picks_preferred_language_edition(db, settings, tmp_path):
+    src = tmp_path / "dl"
+    src.mkdir()
+    (src / "a.mp3").write_bytes(b"x")
+    settings(abs_url="http://abs", abs_token="t")  # preferred_language defaults to English
+    FakeAbs.books = [
+        dict(AUDIBLE[0], title="The Poison Daughter", author="Sheila Masterson", asin="B0GERMAN", language="german"),
+        dict(AUDIBLE[0], title="The Poison Daughter", author="Sheila Masterson", asin="B0ENGLISH", language="english"),
+    ]
+    dl_id = make_download(db, status="downloaded", download_path=str(src),
+                          post_title="Book Club - Sheila Masterson - The Poison Daughter (2026)")
+    run(Pipeline().auto_process(dl_id))
+    dl = reload(db, dl_id)
+    assert dl.parsed_metadata["asin"] == "B0ENGLISH" and dl.m4b_status == "queued"
+
+
+def test_auto_process_does_not_convert_foreign_only_match(db, settings, tmp_path):
+    src = tmp_path / "dl"
+    src.mkdir()
+    (src / "a.mp3").write_bytes(b"x")
+    settings(abs_url="http://abs", abs_token="t")
+    FakeAbs.books = [dict(AUDIBLE[0], title="The Poison Daughter", author="Sheila Masterson", language="german")]
+    dl_id = make_download(db, status="downloaded", download_path=str(src),
+                          post_title="Book Club - Sheila Masterson - The Poison Daughter (2026)")
+    run(Pipeline().auto_process(dl_id))
+    dl = reload(db, dl_id)
+    assert dl.m4b_status is None and dl.parsed_metadata["language_mismatch"] is True

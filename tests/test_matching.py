@@ -51,3 +51,36 @@ def test_rank_candidates_best_first():
     ranked = rank_candidates([other, AUDIBLE_RESULT], "The Vatican Conspiracy", "Rob Jones")
     assert ranked[0]["asin"] == "B07XYZ"
     assert ranked[0]["confidence"] > ranked[1]["confidence"]
+
+
+GERMAN_EDITION = dict(AUDIBLE_RESULT, title="The Poison Daughter", author="Sheila Masterson", asin="B0GERMAN",
+                      language="german", narrator="Mona Fischer, Till Beck", publisher="der Hörverlag")
+ENGLISH_EDITION = dict(AUDIBLE_RESULT, title="The Poison Daughter", author="Sheila Masterson", asin="B0ENGLISH",
+                       language="English", narrator="Some English Narrator")
+
+
+def test_foreign_edition_with_same_title_is_ranked_below_and_capped():
+    ranked = rank_candidates([GERMAN_EDITION, ENGLISH_EDITION], "The Poison Daughter", "Sheila Masterson",
+                             preferred_language="English")
+    assert ranked[0]["asin"] == "B0ENGLISH" and ranked[0]["confidence"] == 100
+    german = ranked[1]
+    assert german["language_mismatch"] and german["confidence"] <= 60
+
+
+def test_only_foreign_editions_never_reach_auto_convert_threshold():
+    ranked = rank_candidates([GERMAN_EDITION], "The Poison Daughter", "Sheila Masterson", preferred_language="English")
+    assert ranked[0]["confidence"] < 90
+
+
+def test_any_language_and_unknown_language_are_not_penalised():
+    assert rank_candidates([GERMAN_EDITION], "The Poison Daughter", "Sheila Masterson",
+                           preferred_language="any")[0]["confidence"] == 100
+    unknown = dict(GERMAN_EDITION, language="")
+    assert rank_candidates([unknown], "The Poison Daughter", "Sheila Masterson",
+                           preferred_language="English")[0]["confidence"] == 100
+
+
+def test_language_codes_are_understood():
+    from app.services.matching import language_mismatch
+    assert not language_mismatch("en", "English")
+    assert language_mismatch("de", "English")

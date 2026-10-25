@@ -53,7 +53,12 @@
             {% if c.series %} · {{ c.series }}{% if c.series_part %} #{{ c.series_part }}{% endif %}{% endif %}
             {% if c.year %} · {{ c.year }}{% endif %}
             {% if c.duration %} · {{ (c.duration // 60)|int }}h {{ (c.duration % 60)|int }}m{% endif %}
+            {% if c.language %} · <span class="{{ 'text-warning fw-semibold' if c.language_mismatch else '' }}">{{ c.language|capitalize }}</span>{% endif %}
+            {% if c.publisher %} · {{ c.publisher }}{% endif %}
           </div>
+          {% if c.language_mismatch %}
+          <div class="small text-warning mt-1"><i class="bi bi-translate me-1"></i>Not {{ preferred_language }} — confidence lowered</div>
+          {% endif %}
           {% if c.description %}<div class="small text-muted mt-1 bc-description">{{ c.description[:220] }}{% if c.description|length > 220 %}…{% endif %}</div>{% endif %}
         </div>
         <div class="d-flex flex-column align-items-end gap-2 flex-shrink-0">

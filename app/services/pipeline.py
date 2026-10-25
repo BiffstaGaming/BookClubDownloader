@@ -347,7 +347,9 @@ class Pipeline:
                                         message=f"Audible search failed: {exc}")
                 return
 
-            candidates = rank_candidates(results, query_title, query_author)
+            preferred_language = get_setting(db, "preferred_language")
+            candidates = rank_candidates(results, query_title, query_author,
+                                         preferred_language=preferred_language)
             if not candidates:
                 meta["match_confidence"] = 0
                 dl.set_metadata(meta)
@@ -363,8 +365,13 @@ class Pipeline:
             db.commit()
             confidence = best["confidence"]
             log_to_db("INFO", "auto",
-                      f"#{download_id}: best match '{best['title']}' by '{best['author']}' — {confidence}%",
+                      f"#{download_id}: best match '{best['title']}' by '{best['author']}' "
+                      f"({best.get('language') or 'language unknown'}) — {confidence}%",
                       download_id=download_id)
+            if best.get("language_mismatch"):
+                log_to_db("WARNING", "auto",
+                          f"#{download_id}: the best match is not in {preferred_language} — "
+                          "not converting automatically", download_id=download_id)
 
             threshold = get_int(db, "auto_match_threshold", 90)
             if not get_bool(db, "auto_convert"):
@@ -821,6 +828,7 @@ def apply_candidate(meta: dict, candidate: dict):
         if value:
             meta[key] = value
     meta["match_confidence"] = candidate.get("confidence", meta.get("match_confidence"))
+    meta["language_mismatch"] = bool(candidate.get("language_mismatch"))
 
 
 def merge_command(input_path: str, output_file: str, meta: dict, cover: str, jobs: str, bitrate: str) -> list[str]:

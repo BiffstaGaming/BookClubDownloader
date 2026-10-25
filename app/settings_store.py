@@ -26,6 +26,7 @@ SETTING_KEYS = [
     "auto_convert",
     "auto_match_threshold",
     "audible_provider",
+    "preferred_language",
     "ha_webhook_url",
     "poll_interval",
     "log_retention_days",
@@ -44,9 +45,15 @@ DEFAULTS = {
     "auto_convert": "1",
     "auto_match_threshold": "90",
     "audible_provider": "audible",
+    "preferred_language": "English",
     "poll_interval": "15",
     "log_retention_days": "14",
 }
+
+# Audible editions in other languages often share the English title exactly;
+# a non-matching edition is scored down so it is never auto-picked. "any" = no preference.
+LANGUAGES = ["English", "German", "French", "Spanish", "Italian", "Dutch", "Portuguese",
+             "Swedish", "Danish", "Norwegian", "Finnish", "Polish", "Japanese"]
 
 AUDIBLE_PROVIDERS = [
     ("audible", "Audible.com (US)"),
