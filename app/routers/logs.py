@@ -1,15 +1,14 @@
 import logging
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import LogEntry
+from app.templating import templates
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
 DEFAULT_LOG_LIMIT = 50

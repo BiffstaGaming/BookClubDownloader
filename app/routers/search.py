@@ -2,7 +2,6 @@ import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -10,11 +9,11 @@ from app.scrapers.abook import get_scraper
 from app.services.nzb import search_nzbs
 from app.services.pipeline import find_duplicates
 from app.settings_store import get_setting
+from app.templating import templates
 from app.ui import alert, not_configured
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 # Route handlers are plain `def` so FastAPI runs them in its thread pool —
 # the scrapers block on network I/O and must not stall the event loop.

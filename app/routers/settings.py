@@ -3,7 +3,6 @@ import os
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from markupsafe import escape
 from sqlalchemy.orm import Session
 
@@ -16,10 +15,10 @@ from app.settings_store import (  # noqa: F401 — get_setting/set_setting re-ex
     AUDIBLE_PROVIDERS, BOOL_KEYS, SECRET_KEYS, SETTING_KEYS, all_settings, get_setting, set_setting,
 )
 from app.ui import alert
+from app.templating import templates
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 
 def _render(request: Request, db: Session, message: str = None, message_type: str = None):

@@ -41,7 +41,7 @@
       {% for c in candidates %}
       <div class="bc-candidate d-flex gap-3 align-items-start">
         {% if c.cover_url %}
-        <img src="{{ c.cover_url }}" alt="" class="bc-cover" loading="lazy" referrerpolicy="no-referrer" />
+        <img src="{{ c.cover_url }}" alt="" class="bc-cover" width="72" height="72" style="width:72px;height:72px;object-fit:cover;" loading="lazy" referrerpolicy="no-referrer" />
         {% else %}
         <div class="bc-cover bc-cover-empty"><i class="bi bi-book"></i></div>
         {% endif %}

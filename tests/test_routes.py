@@ -180,3 +180,9 @@ def test_health_reports_dead_background_task(client, monkeypatch):
     monkeypatch.setattr(pl.pipeline, "tasks", [Done()])
     r = client.get("/api/health")
     assert r.status_code == 503 and r.json()["stopped"] == ["bookclub-worker"]
+
+
+def test_stylesheet_url_is_versioned(client):
+    # A new version string per stylesheet change stops browsers using a stale cached copy
+    html = client.get("/downloads").text
+    assert "/static/css/app.css?v=" in html and "?v=dev" not in html

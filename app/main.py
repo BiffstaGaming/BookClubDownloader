@@ -4,9 +4,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from app.database import engine, migrate_db
+from app.templating import templates
 from app import models
 from app.routers import search, downloads, settings as settings_router
 from app.routers import logs as logs_router
@@ -41,7 +41,6 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="BookClub Downloader", lifespan=lifespan)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="app/templates")
 
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(downloads.router, prefix="/downloads", tags=["downloads"])

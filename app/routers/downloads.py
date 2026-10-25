@@ -3,7 +3,6 @@ import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from markupsafe import escape
 from sqlalchemy import and_, func, not_
 from sqlalchemy.orm import Session
@@ -19,11 +18,11 @@ from app.services.pipeline import (
     apply_candidate, check_input_folder, enqueue, find_duplicates, pipeline, queue_positions,
 )
 from app.settings_store import AUDIBLE_PROVIDERS, get_setting
+from app.templating import templates
 from app.ui import alert, alert_html, not_configured
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 # Handlers doing network I/O are plain `def` so FastAPI runs them in its thread
 # pool instead of blocking the event loop (and with it the background worker).
