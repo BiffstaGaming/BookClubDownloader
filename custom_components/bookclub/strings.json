@@ -95,7 +95,7 @@
         },
         "query": {
           "name": "Book",
-          "description": "Title, optionally with \"by <author>\"."
+          "description": "The book title, optionally followed by \"by\" and the author, e.g. Project Hail Mary by Andy Weir."
         },
         "requested_by": {
           "name": "Requested by",

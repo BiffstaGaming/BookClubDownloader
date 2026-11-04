@@ -32,7 +32,8 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          ignore: brands description topics
+          # license: add a LICENSE file to the repo to drop this (only HACS's default store needs it)
+          ignore: brands description topics license
 
   pytest:
     runs-on: ubuntu-latest
