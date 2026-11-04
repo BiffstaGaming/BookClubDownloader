@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
@@ -256,9 +257,21 @@ def alternatives(request: Request, download_id: int, db: Session = Depends(get_d
 
 # ── requests ("find and download this book") ─────────────────────────────────
 
+REQUEST_FOUND_MINUTES = 15  # how long a found ("sent") request stays in the list
+
+
 def _request_rows(request: Request, db: Session, notice: str | None = ""):
-    """The requests list. `notice` replaces the message above it; None (background refresh) leaves it alone."""
-    rows = db.query(BookRequest).order_by(BookRequest.id.desc()).limit(8).all()
+    """
+    The requests still worth showing: anything searching or waiting for you, and
+    a found one for a while (its download is followed on the Downloads page).
+    Cancelled ones are gone straight away. `notice` replaces the message above
+    the list; None (background refresh) leaves it alone.
+    """
+    found_cutoff = datetime.utcnow() - timedelta(minutes=REQUEST_FOUND_MINUTES)
+    rows = (db.query(BookRequest)
+            .filter(BookRequest.status != "cancelled",
+                    or_(BookRequest.status != "sent", BookRequest.updated_at >= found_cutoff))
+            .order_by(BookRequest.id.desc()).limit(8).all())
     return templates.TemplateResponse(
         "partials/request_rows.html", {"request": request, "requests": rows, "notice": notice})
 

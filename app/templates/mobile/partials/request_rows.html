@@ -1,26 +1,37 @@
-{% set badges = {
-  "pending": ("bc-badge-muted", "hourglass", "Waiting"),
-  "searching": ("bc-conf-mid", "search", "Searching"),
+{# Each request card says where the request is and offers only the buttons that make
+   sense at that stage, all labelled. Found requests drop off after a while (the
+   download carries on in Downloads); cancelled ones disappear at once. #}
+{% set stages = {
+  "pending": ("bc-badge-muted", "hourglass", "Starting"),
+  "searching": ("bc-conf-mid", "search", "Searching the forum"),
   "needs_choice": ("bc-conf-mid", "question-circle", "Which one?"),
-  "sent": ("bc-badge-success", "send-check", "Downloading"),
+  "sent": ("bc-badge-success", "check-circle-fill", "Found — downloading"),
   "duplicate": ("bc-conf-mid", "files", "Already have it?"),
   "not_found": ("bc-badge-danger", "x-circle", "Not found"),
-  "failed": ("bc-badge-danger", "exclamation-triangle", "Failed"),
-  "cancelled": ("bc-badge-muted", "slash-circle", "Cancelled"),
+  "failed": ("bc-badge-danger", "exclamation-triangle", "Didn't work"),
 } %}
 {# Messages go outside the auto-refreshing list (out-of-band); see the desktop version. #}
 {% if notice is not none %}<div id="request-notice" hx-swap-oob="true">{% if notice %}{{ notice | safe }}{% endif %}</div>{% endif %}
 {% if requests %}
-<div class="m-section">Requests</div>
+<div class="m-section">Your requests</div>
 {% for r in requests[:5] %}
-{% set cls, icon, label = badges.get(r.status, ("bc-badge-muted", "dot", r.status)) %}
+{% set cls, icon, label = stages.get(r.status, ("bc-badge-muted", "dot", r.status)) %}
 <div class="m-card">
-  <div class="d-flex justify-content-between align-items-start gap-2">
-    <div class="m-card-title">{{ r.query }}</div>
-    <span class="badge {{ cls }} flex-shrink-0"><i class="bi bi-{{ icon }} me-1"></i>{{ label }}</span>
+  <div class="m-card-title">{{ r.query }}</div>
+  <div class="small text-muted">{% if r.requested_by %}{{ r.requested_by }} · {% endif %}{{ r.created_at | localtime }}</div>
+  <div class="mt-2">
+    <span class="badge {{ cls }}">
+      {% if r.status in ("pending", "searching") %}<span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>{% else %}<i class="bi bi-{{ icon }} me-1"></i>{% endif %}{{ label }}
+    </span>
   </div>
-  <div class="small text-muted mt-1">{% if r.requested_by %}{{ r.requested_by }} · {% endif %}{{ r.created_at | localtime }}</div>
-  {% if r.message %}<div class="small text-muted mt-2">{{ r.message }}</div>{% endif %}
+
+  {% if r.status == "sent" %}
+  <div class="small text-muted mt-2">Sent to NZBGet. Follow it on the Downloads tab — this card goes away by itself.</div>
+  {% elif r.status == "needs_choice" %}
+  <div class="small text-muted mt-2">Several forum posts could be it — tap the right one:</div>
+  {% elif r.message %}
+  <div class="small text-muted mt-2">{{ r.message }}</div>
+  {% endif %}
 
   {% if r.status == "needs_choice" %}
   {% set options = r.parsed_options %}
@@ -40,26 +51,36 @@
     </div>
   </details>
   {% endif %}
-  <a class="btn bc-btn-outline w-100 mt-2" href="/m/search?q={{ r.query | urlencode }}">
-    <i class="bi bi-search me-2"></i>Not listed? Open in Search</a>
   {% endif %}
 
   <div class="m-actions">
-    {% if r.status == "sent" and r.download_id %}
-    <a class="btn bc-btn-outline btn-sm" href="/m/downloads?highlight={{ r.download_id }}"><i class="bi bi-arrow-down-circle me-1"></i>Download</a>
+    {% if r.status == "sent" %}
+      {% if r.download_id %}
+      <a class="btn bc-btn-sm-primary flex-grow-1" href="/m/downloads?highlight={{ r.download_id }}">
+        <i class="bi bi-arrow-down-circle me-1"></i>View download</a>
+      {% endif %}
+      <button class="btn bc-btn-outline btn-sm" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+              hx-swap="innerHTML">Dismiss</button>
+    {% elif r.status == "needs_choice" %}
+      <a class="btn bc-btn-outline btn-sm flex-grow-1" href="/m/search?q={{ r.query | urlencode }}">
+        <i class="bi bi-search me-1"></i>Not listed? Search</a>
+      <button class="btn bc-btn-outline btn-sm" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+              hx-swap="innerHTML" hx-confirm="Cancel this request?">Cancel request</button>
+    {% elif r.status == "duplicate" %}
+      <button class="btn bc-btn-sm-primary flex-grow-1" hx-post="/downloads/requests/{{ r.id }}/choose" hx-vals='{"force": "1"}'
+              hx-target="#request-rows" hx-swap="innerHTML"><i class="bi bi-send me-1"></i>Get it anyway</button>
+      <button class="btn bc-btn-outline btn-sm" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+              hx-swap="innerHTML">Dismiss</button>
+    {% elif r.status in ("not_found", "failed") %}
+      <button class="btn bc-btn-sm-primary flex-grow-1" hx-post="/downloads/requests/{{ r.id }}/retry"
+              hx-target="#request-rows" hx-swap="innerHTML"><i class="bi bi-arrow-repeat me-1"></i>Try again</button>
+      <a class="btn bc-btn-outline btn-sm" href="/m/search?q={{ r.query | urlencode }}" aria-label="Search the forum"><i class="bi bi-search"></i></a>
+      <button class="btn bc-btn-outline btn-sm" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+              hx-swap="innerHTML">Dismiss</button>
+    {% else %}{# pending / searching #}
+      <button class="btn bc-btn-outline btn-sm ms-auto" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+              hx-swap="innerHTML" hx-confirm="Stop looking for this book?">Cancel</button>
     {% endif %}
-    {% if r.status == "duplicate" %}
-    <button class="btn bc-btn-sm-primary btn-sm" hx-post="/downloads/requests/{{ r.id }}/choose" hx-vals='{"force": "1"}'
-            hx-target="#request-rows" hx-swap="innerHTML"><i class="bi bi-send me-1"></i>Get anyway</button>
-    {% endif %}
-    {% if r.status in ("not_found", "failed") %}
-    <button class="btn bc-btn-sm-primary btn-sm" hx-post="/downloads/requests/{{ r.id }}/retry"
-            hx-target="#request-rows" hx-swap="innerHTML"><i class="bi bi-arrow-repeat me-1"></i>Try again</button>
-    {% endif %}
-    <button class="btn btn-sm ms-auto" style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
-            hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows" hx-swap="innerHTML"
-            hx-confirm="{{ 'Stop this request?' if r.status in ('pending', 'searching') else 'Remove this request from the list?' }}"
-            aria-label="Remove request"><i class="bi bi-x-lg"></i></button>
   </div>
 </div>
 {% endfor %}

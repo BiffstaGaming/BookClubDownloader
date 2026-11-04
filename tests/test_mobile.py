@@ -90,3 +90,23 @@ def test_long_choice_lists_show_more_and_link_to_search(client, db):
         page = client.get("/downloads/requests", headers=headers).text
         assert "RinaKent- Book 8" in page and "Show 3 more" in page and search_link in page
         assert page.count('hx-vals=\'{"option": ') == 8
+
+
+def test_request_cards_follow_the_request_through(client, db):
+    from datetime import datetime, timedelta
+    from app.models import BookRequest
+    old = datetime.utcnow() - timedelta(minutes=30)
+    db.add_all([
+        BookRequest(query="Still Searching", status="searching"),
+        BookRequest(query="Just Found", status="sent", download_id=7, updated_at=datetime.utcnow()),
+        BookRequest(query="Found Long Ago", status="sent", download_id=6, updated_at=old),
+        BookRequest(query="Was Cancelled", status="cancelled"),
+        BookRequest(query="No Luck", status="not_found", message="Nothing on the forum matches"),
+    ])
+    db.commit()
+    for headers in ({}, MOBILE_UI):
+        page = client.get("/downloads/requests", headers=headers).text
+        assert "Still Searching" in page and "Just Found" in page and "No Luck" in page
+        assert "Found Long Ago" not in page and "Was Cancelled" not in page
+        assert "View download" in page and "Dismiss" in page and "Try again" in page and ">Cancel<" in page
+        assert "bi-x-lg" not in page  # no unlabelled X buttons

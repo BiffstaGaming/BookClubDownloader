@@ -1,11 +1,11 @@
 {% set badges = {
-  "pending": ("bc-badge-muted", "hourglass", "Waiting"),
-  "searching": ("bc-conf-mid", "search", "Searching"),
+  "pending": ("bc-badge-muted", "hourglass", "Starting"),
+  "searching": ("bc-conf-mid", "search", "Searching the forum"),
   "needs_choice": ("bc-conf-mid", "question-circle", "Which one?"),
-  "sent": ("bc-badge-success", "send-check", "Downloading"),
+  "sent": ("bc-badge-success", "check-circle-fill", "Found — downloading"),
   "duplicate": ("bc-conf-mid", "files", "Already have it?"),
   "not_found": ("bc-badge-danger", "x-circle", "Not found"),
-  "failed": ("bc-badge-danger", "exclamation-triangle", "Failed"),
+  "failed": ("bc-badge-danger", "exclamation-triangle", "Didn't work"),
   "cancelled": ("bc-badge-muted", "slash-circle", "Cancelled"),
 } %}
 {# Messages go outside the auto-refreshing list (out-of-band), so a refresh doesn't wipe them.
@@ -26,7 +26,9 @@
         </td>
         <td>
           <span class="badge {{ cls }}"><i class="bi bi-{{ icon }} me-1"></i>{{ label }}</span>
-          {% if r.message %}<div class="text-muted small mt-1 bc-reason">{{ r.message }}</div>{% endif %}
+          {% if r.status == "sent" %}
+          <div class="text-muted small mt-1 bc-reason">Sent to NZBGet — follow it in the list below. This goes away by itself.</div>
+          {% elif r.message %}<div class="text-muted small mt-1 bc-reason">{{ r.message }}</div>{% endif %}
           {% if r.status == "needs_choice" %}
           {% set options = r.parsed_options %}
           {% macro option_button(o, rid) %}
@@ -52,31 +54,30 @@
           {% endif %}
         </td>
         <td class="text-end text-nowrap" style="width:1%;">
-          {% if r.status == "sent" and r.download_id %}
-          <a class="btn btn-sm bc-btn-outline" href="/downloads?highlight={{ r.download_id }}" title="Show the download">
-            <i class="bi bi-arrow-down-circle"></i>
-          </a>
-          {% endif %}
-          {% if r.status == "duplicate" %}
-          <button class="btn btn-sm bc-btn-sm-primary" hx-post="/downloads/requests/{{ r.id }}/choose"
-                  hx-vals='{"force": "1"}' hx-target="#request-rows" hx-swap="innerHTML"
-                  title="Download it anyway">
-            <i class="bi bi-send me-1"></i>Get anyway
-          </button>
-          {% endif %}
-          {% if r.status in ("not_found", "failed") %}
-          <button class="btn btn-sm bc-btn-sm-primary" hx-post="/downloads/requests/{{ r.id }}/retry"
-                  hx-target="#request-rows" hx-swap="innerHTML" title="Try again">
-            <i class="bi bi-arrow-repeat"></i>
-          </button>
-          {% endif %}
-          {% if r.status in ("pending", "searching", "needs_choice", "duplicate", "not_found", "failed", "cancelled", "sent") %}
-          <button class="btn btn-sm" style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
-                  hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows" hx-swap="innerHTML"
-                  hx-confirm="{{ 'Stop this request?' if r.status in ('pending', 'searching') else 'Remove this request from the list? (A download already sent keeps going.)' }}"
-                  title="Remove from this list (a download already sent keeps going)" aria-label="Remove request">
-            <i class="bi bi-x-lg"></i>
-          </button>
+          {% if r.status == "sent" %}
+            {% if r.download_id %}
+            <a class="btn btn-sm bc-btn-sm-primary" href="/downloads?highlight={{ r.download_id }}">
+              <i class="bi bi-arrow-down-circle me-1"></i>View download</a>
+            {% endif %}
+            <button class="btn btn-sm bc-btn-outline" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+                    hx-swap="innerHTML">Dismiss</button>
+          {% elif r.status == "needs_choice" %}
+            <button class="btn btn-sm bc-btn-outline" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+                    hx-swap="innerHTML" hx-confirm="Cancel this request?">Cancel request</button>
+          {% elif r.status == "duplicate" %}
+            <button class="btn btn-sm bc-btn-sm-primary" hx-post="/downloads/requests/{{ r.id }}/choose"
+                    hx-vals='{"force": "1"}' hx-target="#request-rows" hx-swap="innerHTML">
+              <i class="bi bi-send me-1"></i>Get it anyway</button>
+            <button class="btn btn-sm bc-btn-outline" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+                    hx-swap="innerHTML">Dismiss</button>
+          {% elif r.status in ("not_found", "failed") %}
+            <button class="btn btn-sm bc-btn-sm-primary" hx-post="/downloads/requests/{{ r.id }}/retry"
+                    hx-target="#request-rows" hx-swap="innerHTML"><i class="bi bi-arrow-repeat me-1"></i>Try again</button>
+            <button class="btn btn-sm bc-btn-outline" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+                    hx-swap="innerHTML">Dismiss</button>
+          {% else %}{# pending / searching #}
+            <button class="btn btn-sm bc-btn-outline" hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows"
+                    hx-swap="innerHTML" hx-confirm="Stop looking for this book?">Cancel</button>
           {% endif %}
         </td>
       </tr>
