@@ -34,7 +34,6 @@ SETTING_KEYS = [
     "ha_webhook_url",
     "ha_events",
     "public_url",
-    "api_token",
     "ai_enabled",
     "claude_oauth_token",
     "ai_model",

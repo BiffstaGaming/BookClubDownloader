@@ -1,6 +1,6 @@
 {% if entries %}
 {% for entry in entries %}
-<tr>
+<tr data-log-id="{{ entry.id }}">
   <td class="text-muted" style="white-space:nowrap;font-size:0.75rem;">
     {{ entry.created_at | localtime("%Y-%m-%d %H:%M:%S") if entry.created_at else "—" }}
   </td>

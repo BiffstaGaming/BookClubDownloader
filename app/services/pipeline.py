@@ -117,6 +117,7 @@ class Pipeline:
         self.current_proc: asyncio.subprocess.Process | None = None
         self.cancelled: set[int] = set()
         self.last_poll_error = ""
+        self.nzbget_reachable: bool | None = None   # None = not asked lately (nothing downloading)
         self.last_prune: datetime | None = None
         self.last_poll_at: datetime | None = None
 
@@ -190,6 +191,15 @@ class Pipeline:
                     log_to_db("INFO", "pipeline", f"Upgrade: {len(old)} earlier download(s) left for manual conversion")
             stuck = db.query(Download).filter(Download.m4b_status == "converting").all()
             for dl in stuck:
+                if dl.parsed_metadata.get("filed") and dl.m4b_path and os.path.isfile(dl.m4b_path):
+                    # Restarted after the book was already moved into the library: it's done.
+                    dl.m4b_status = "converted"
+                    dl.m4b_progress = 100
+                    dl.abs_status = "pending" if abs_configured(db) else "skipped"
+                    log_to_db("INFO", "conversion",
+                              f"BookClub restarted while filing #{dl.id} — the book was already in the library",
+                              download_id=dl.id)
+                    continue
                 dl.m4b_status = "queued"
                 dl.m4b_progress = None
                 dl.queued_at = dl.queued_at or datetime.utcnow()
@@ -226,6 +236,8 @@ class Pipeline:
                 Download.status == "sent", Download.nzbget_id.isnot(None)
             ).all()
 
+            if not pending:
+                self.nzbget_reachable = None
             if pending and nzbget_url:
                 client = NzbgetClient(nzbget_url, get_setting(db, "nzbget_username"), get_setting(db, "nzbget_password"))
                 try:
@@ -235,11 +247,13 @@ class Pipeline:
                     if message != self.last_poll_error:
                         log_to_db("WARNING", "poller", message)
                     self.last_poll_error = message
+                    self.nzbget_reachable = False
                     history = queue = None
                 if history is not None:
                     if self.last_poll_error:
                         log_to_db("INFO", "poller", "NZBGet reachable again")
                     self.last_poll_error = ""
+                    self.nzbget_reachable = True
                     self._apply_nzbget_state(db, pending, history, queue, completed, failed)
                     db.commit()
 
@@ -339,13 +353,27 @@ class Pipeline:
         finally:
             db.close()
 
-    async def _needs_review(self, db, dl: Download, meta: dict, reason: str, retry: bool = False):
+    @staticmethod
+    def _taken_over(db, dl: Download) -> bool:
+        """
+        True when someone converted, matched or saved the book by hand while the
+        automatic match was still searching — their choice wins, so stop here.
+        """
+        db.refresh(dl)
+        meta = dl.parsed_metadata
+        return dl.status != "downloaded" or dl.m4b_status is not None or bool(meta.get("auto_processed"))
+
+    async def _needs_review(self, db, dl: Download, meta: dict, reason: str, retry: bool = False,
+                            max_retries: int = len(AUTO_RETRY_MINUTES)):
         """
         Stop and ask a person — or, for a temporary problem, try again later.
         The reason is kept on the row so the Downloads page can show it.
         """
+        if self._taken_over(db, dl):
+            log_to_db("INFO", "auto", f"#{dl.id}: handled by hand meanwhile — automatic match dropped", download_id=dl.id)
+            return
         attempts = int(meta.get("auto_attempts") or 0)
-        if retry and attempts < len(AUTO_RETRY_MINUTES):
+        if retry and attempts < min(max_retries, len(AUTO_RETRY_MINUTES)):
             wait = AUTO_RETRY_MINUTES[attempts]
             meta["auto_attempts"] = attempts + 1
             meta["auto_next_try"] = (datetime.utcnow() + timedelta(minutes=wait)).isoformat()
@@ -417,12 +445,14 @@ class Pipeline:
             results += found
             candidates = rank_candidates(results, query_title, query_author, preferred_language=preferred_language,
                                          audio_minutes=audio_minutes)
-            if candidates and candidates[0]["confidence"] >= threshold and not candidates[0]["language_mismatch"]:
+            if (candidates and candidates[0]["confidence"] >= threshold and not candidates[0]["language_mismatch"]
+                    and not candidates[0]["duration_mismatch"]):
                 break
 
         if not candidates:
             meta["match_confidence"] = 0
-            await self._needs_review(db, dl, meta, "No Audible results — pick the details manually")
+            await self._needs_review(db, dl, meta, "No Audible results — pick the details manually",
+                                     retry=True, max_retries=2)
             return
 
         best = candidates[0]
@@ -434,7 +464,7 @@ class Pipeline:
                   download_id=download_id)
 
         chosen, method, why_not = None, "", ""
-        if best["confidence"] >= threshold and not best["language_mismatch"]:
+        if best["confidence"] >= threshold and not best["language_mismatch"] and not best["duration_mismatch"]:
             chosen, method = best, f"rules ({best['confidence']}%)"
         else:
             if best.get("language_mismatch"):
@@ -457,6 +487,9 @@ class Pipeline:
         meta["match_method"] = method
         if not get_bool(db, "auto_convert"):
             await self._needs_review(db, dl, meta, f"Matched by {method}, but auto-convert is off — review and convert")
+            return
+        if self._taken_over(db, dl):
+            log_to_db("INFO", "auto", f"#{dl.id}: handled by hand meanwhile — automatic match dropped", download_id=dl.id)
             return
         meta["auto_processed"] = True
         meta.pop("review_reason", None)
@@ -491,7 +524,7 @@ class Pipeline:
         shortlist = candidates[:8]
         try:
             verdict = await asyncio.to_thread(ai.review_match, db, download, shortlist, language)
-        except ai.ClaudeError as exc:
+        except Exception as exc:  # ClaudeError, or anything unexpected: never stop the poller
             log_to_db("WARNING", "ai", f"#{dl.id}: Claude review failed — {exc}", download_id=dl.id)
             return None, "", f"Claude review failed: {exc}"
         meta["ai_review"] = verdict
@@ -614,6 +647,8 @@ class Pipeline:
             if not dl or dl.m4b_status != "queued":
                 return
             meta = dl.parsed_metadata
+            if meta.pop("filed", None):
+                dl.set_metadata(meta)
             input_path = meta.get("input_path") or dl.download_path or ""
             nzbget_folder = dl.download_path or ""
             output_root = get_setting(db, "m4b_output_path")
@@ -631,6 +666,7 @@ class Pipeline:
                 encoding["jobs"] = str(min(int(encoding["jobs"]), max_cores))
             delete_source = get_bool(db, "delete_source")
             roots = download_roots(db)
+            created_at = dl.created_at
             self.cancelled.discard(dl_id)
             self.current_id = dl_id  # before the commit, so Stop works from the first moment
             dl.m4b_status = "converting"
@@ -722,6 +758,7 @@ class Pipeline:
                 if os.path.exists(final_path):
                     raise FileExistsError(f"{final_path} appeared while converting")
                 await asyncio.to_thread(shutil.move, work_file, final_path)
+                self._mark_filed(dl_id, final_path, created_at)
             except Exception as exc:
                 keep_work_dir = True
                 await self._fail(dl_id, "move_failed", f"Could not move the book into the library: {exc} "
@@ -754,7 +791,7 @@ class Pipeline:
             db = SessionLocal()
             try:
                 dl = db.query(Download).filter(Download.id == dl_id).first()
-                if dl is None:
+                if dl is None or dl.created_at != created_at:
                     # Removed from the history while it was being filed; the book itself is in place.
                     log_to_db("INFO", "conversion", f"#{dl_id}: finished after the row was deleted — book at {final_path}")
                     return
@@ -782,6 +819,20 @@ class Pipeline:
             if not keep_work_dir:
                 await asyncio.to_thread(shutil.rmtree, work_dir, True)
 
+    def _mark_filed(self, dl_id: int, final_path: str, created_at):
+        """Record that the book is in the library, before anything else can go wrong."""
+        db = SessionLocal()
+        try:
+            dl = db.query(Download).filter(Download.id == dl_id).first()
+            if dl and dl.created_at == created_at:
+                meta = dl.parsed_metadata
+                meta["filed"] = True
+                dl.set_metadata(meta)
+                dl.m4b_path = final_path
+                db.commit()
+        finally:
+            db.close()
+
     async def _run(self, dl_id: int, cmd: list[str]) -> tuple[int, str]:
         """Run a tool, streaming output so progress percentages reach the UI."""
         logger.info("Running for #%d: %s", dl_id, " ".join(cmd))
@@ -792,6 +843,8 @@ class Pipeline:
         except FileNotFoundError as exc:
             return 127, f"{cmd[0]} is not installed: {exc}"
         self.current_proc = proc
+        if dl_id in self.cancelled:
+            self._kill_current()  # Stop came in while the process was starting
         buf, lines, last_progress = "", [], -1
         while True:
             chunk = await proc.stdout.read(1024)
@@ -839,6 +892,7 @@ class Pipeline:
                 return
             meta = dl.parsed_metadata
             m4b_path = dl.m4b_path
+            created_at = dl.created_at
             abs_url, token = get_setting(db, "abs_url"), get_setting(db, "abs_token")
             library_id = get_setting(db, "abs_library_id")
             provider = get_setting(db, "audible_provider")
@@ -881,8 +935,8 @@ class Pipeline:
         db = SessionLocal()
         try:
             dl = db.query(Download).filter(Download.id == dl_id).first()
-            if not dl:
-                return
+            if not dl or dl.created_at != created_at or dl.m4b_path != m4b_path:
+                return  # removed (or re-converted) while waiting for Audiobookshelf
             if not item:
                 dl.abs_status = "not_found"
                 dl.error_message = (f"Audiobookshelf has not picked up {abs_dir} yet. Check that this folder is inside "
@@ -1016,6 +1070,25 @@ def is_download_folder(input_path: str, nzbget_folder: str) -> bool:
     return same or library.is_within(input_path, nzbget_folder)
 
 
+AUTO_STATE_KEYS = ("auto_processed", "auto_attempts", "auto_next_try", "review_reason", "match_method",
+                   "ai_review", "filed")
+
+
+def reset_auto_state(meta: dict) -> dict:
+    """Forget everything the automatic match did, e.g. for a fresh download of the same book."""
+    for key in AUTO_STATE_KEYS:
+        meta.pop(key, None)
+    return meta
+
+
+def mark_handled_by_hand(meta: dict) -> dict:
+    """A person took over: no automatic match (running or scheduled) may overwrite their choice."""
+    meta["auto_processed"] = True
+    meta.pop("auto_next_try", None)
+    meta.pop("review_reason", None)
+    return meta
+
+
 def enqueue(dl: Download):
     dl.m4b_status = "queued"
     dl.m4b_progress = None
@@ -1103,7 +1176,7 @@ def tone_command(file_path: str, meta: dict, cover: str) -> list[str]:
 
 
 def find_duplicates(db, title: str, author: str = "", nzb_hash: str = "", search_term: str = "",
-                    exclude_id: int = None) -> list[str]:
+                    exclude_id: int = None, include_failed: bool = True) -> list[str]:
     """Reasons this book may already be downloaded or in the library (empty list if none)."""
     from app.services.matching import ratio
 
@@ -1114,7 +1187,8 @@ def find_duplicates(db, title: str, author: str = "", nzb_hash: str = "", search
     filters = [Download.nzb_hash == nzb_hash] if nzb_hash else []
     if search_term:
         filters.append(Download.search_term == search_term)
-    exact = q.filter(or_(*filters)).order_by(Download.created_at.desc()).first() if filters else None
+    exact_q = q if include_failed else q.filter(Download.status != "failed")
+    exact = exact_q.filter(or_(*filters)).order_by(Download.created_at.desc()).first() if filters else None
     if exact:
         when = exact.created_at.strftime("%Y-%m-%d") if exact.created_at else "earlier"
         reasons.append(f"This NZB was already sent on {when} (download #{exact.id}, {exact.status})")

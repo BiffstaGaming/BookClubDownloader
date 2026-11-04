@@ -47,7 +47,10 @@ def require_token(request: Request, db: Session = Depends(get_db)):
 @router.get("/health")
 def health(db: Session = Depends(get_db)):
     """503 when the database is unreachable or a background task has died (Docker marks it unhealthy)."""
-    db.query(func.count(Download.id)).scalar()
+    try:
+        db.query(func.count(Download.id)).scalar()
+    except Exception as exc:
+        return JSONResponse({"status": "error", "database": str(exc)[:200]}, status_code=503)
     dead = [t.get_name() for t in pipeline.tasks if t.done()]
     body = {"status": "degraded" if dead else "ok", "pipeline": bool(pipeline.tasks) and not dead, "stopped": dead}
     return JSONResponse(body, status_code=503 if dead else 200)
@@ -114,7 +117,8 @@ def status(db: Session = Depends(get_db)):
         "queue": queued_titles,
         "requests_searching": open_requests,
         "requests_waiting": waiting_requests,
-        "nzbget_reachable": not pipeline.last_poll_error,
+        # Only known while something is downloading (that's when NZBGet is asked); null otherwise.
+        "nzbget_reachable": pipeline.nzbget_reachable,
         "last_poll": pipeline.last_poll_at.isoformat(timespec="seconds") + "Z" if pipeline.last_poll_at else None,
         "ai_calls_today": ai.usage(db)["calls"],
         "ai_plan_5h_percent": (plan.get("five_hour") or {}).get("percent"),

@@ -8,7 +8,9 @@
   "failed": ("bc-badge-danger", "exclamation-triangle", "Failed"),
   "cancelled": ("bc-badge-muted", "slash-circle", "Cancelled"),
 } %}
-{% if notice %}<div class="p-3 pb-0">{{ notice | safe }}</div>{% endif %}
+{# Messages go outside the auto-refreshing list (out-of-band), so a refresh doesn't wipe them.
+   Actions send notice="" to clear an old message; the background refresh sends nothing. #}
+{% if notice is not none %}<div id="request-notice" hx-swap-oob="true">{% if notice %}<div class="px-3 pt-3">{{ notice | safe }}</div>{% endif %}</div>{% endif %}
 {% if requests %}
 <div class="table-responsive">
   <table class="table bc-table mb-0">
@@ -59,7 +61,8 @@
           {% if r.status in ("pending", "searching", "needs_choice", "duplicate", "not_found", "failed", "cancelled", "sent") %}
           <button class="btn btn-sm" style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
                   hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows" hx-swap="innerHTML"
-                  title="Remove from this list (a download already sent keeps going)">
+                  hx-confirm="{{ 'Stop this request?' if r.status in ('pending', 'searching') else 'Remove this request from the list? (A download already sent keeps going.)' }}"
+                  title="Remove from this list (a download already sent keeps going)" aria-label="Remove request">
             <i class="bi bi-x-lg"></i>
           </button>
           {% endif %}

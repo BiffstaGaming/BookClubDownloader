@@ -29,6 +29,11 @@ media share that holds the Audiobookshelf library.
 
 Open `http://<host>:9933/settings`.
 
+Saved passwords and tokens are never shown again; leave a field blank to keep it,
+or tick *Forget the saved value* to remove it. The web UI has no login, so keep it
+on your LAN. Changes requested by other websites are refused, and the Home
+Assistant API needs its own token.
+
 1. **abook.link** — forum login. Use *Test* to check it.
 2. **NZBGet** — URL and credentials. If NZBGet sees the downloads folder under a
    different path than BookClub, set *NZBGet Path Prefix* (NZBGet's view) and
@@ -36,7 +41,9 @@ Open `http://<host>:9933/settings`.
    deletes folders inside these paths.
 3. **Paths & Conversion**
    - *M4B Output Directory*: m4b-tool's working folder (and the library root if no
-     template is set).
+     template is set). The default `/m4b` lives inside the container, which is fine
+     as a working folder when a library template is set. Without a template, point
+     it at a mounted folder, or finished books are lost on the next update.
    - *Library Location Template*: where finished books go. Recommended:
      `/Media/Audiobooks/[Author]/[Series]/[BookNumber] - [Title]/[Title].m4b`.
      Empty parts are dropped, so a standalone book becomes `Author/Title/Title.m4b`.

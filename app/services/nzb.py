@@ -41,9 +41,11 @@ def search_nzbs(source: str, term: str) -> list[dict]:
     return results
 
 
-def submit_to_nzbget(db: Session, content: bytes, name: str, password: str = "") -> int:
+def submit_to_nzbget(db: Session, content: bytes, name: str, password: str = "", force: bool = False) -> int:
+    """`force` = a deliberate re-send: NZBGet must not skip it as a duplicate of an earlier download."""
     nzbget_url = get_setting(db, "nzbget_url")
     if not nzbget_url:
         raise NzbError("NZBGet is not configured")
     client = NzbgetClient(nzbget_url, get_setting(db, "nzbget_username"), get_setting(db, "nzbget_password"))
-    return client.add_nzb(content, name=name, category=get_setting(db, "nzbget_category"), password=password)
+    return client.add_nzb(content, name=name, category=get_setting(db, "nzbget_category"), password=password,
+                          dupe_mode="FORCE" if force else "SCORE")

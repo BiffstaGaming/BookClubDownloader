@@ -47,6 +47,8 @@ def cached_search(db: Session, query: str) -> tuple[list[dict], datetime] | None
         ids = json.loads(row.topic_ids)
     except ValueError:
         return None
+    if not ids:
+        return None  # nothing found last time: ask the forum again
     topics = {t.topic_id: t for t in db.query(ForumTopic).filter(ForumTopic.topic_id.in_(ids)).all()}
     return [{"topic_id": i, "title": topics[i].title} for i in ids if i in topics], row.searched_at
 

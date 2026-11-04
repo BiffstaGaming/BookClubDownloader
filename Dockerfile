@@ -54,27 +54,31 @@ RUN case "${TARGETARCH:-amd64}" in \
     && install -m 0755 "/tmp/tone-${TONE_VERSION}-${TONE_ARCH}/tone" /usr/local/bin/tone \
     && rm -rf /tmp/tone*
 
-# Claude Code CLI for the optional AI reviewer — runs on your Claude plan via
-# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`), never the paid API.
-# The installer puts it under /root; copy the binary out so PUID users can run it.
-RUN curl -fsSL https://claude.ai/install.sh | bash \
-    && install -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude \
-    && rm -rf /root/.local/bin/claude /root/.local/share/claude
-
 # tone does not need ICU culture data; skip the libicu dependency
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
     PYTHONUNBUFFERED=1 \
     DISABLE_AUTOUPDATER=1
 
 # nice/taskset keep encoding at low priority and on the allowed cores
-RUN tone -v && m4b-tool --version && command -v setpriv && command -v nice && command -v taskset \
-    && claude --version
+RUN tone -v && m4b-tool --version && command -v setpriv && command -v nice && command -v taskset
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Claude Code CLI for the optional AI reviewer — runs on your Claude plan via
+# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`), never the paid API.
+# The installer puts it under /root; copy the binary out so PUID users can run it.
+# CI passes a new CLAUDE_CLI_REFRESH on every build so the build cache doesn't keep
+# an old CLI forever (it never updates itself: DISABLE_AUTOUPDATER).
+ARG CLAUDE_CLI_REFRESH=manual
+RUN echo "Claude CLI refresh: ${CLAUDE_CLI_REFRESH}" \
+    && curl -fsSL https://claude.ai/install.sh | bash \
+    && install -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude \
+    && rm -rf /root/.local/bin/claude /root/.local/share/claude \
+    && claude --version
+
 COPY . .
-RUN mkdir -p /app/data && chmod +x /app/docker/entrypoint.sh
+RUN mkdir -p /app/data /m4b && chmod +x /app/docker/entrypoint.sh
 
 EXPOSE 9933
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \

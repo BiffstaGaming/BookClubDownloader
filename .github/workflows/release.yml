@@ -54,6 +54,7 @@ jobs:
           context: .
           load: true
           tags: bookclub:ci
+          build-args: CLAUDE_CLI_REFRESH=${{ github.run_id }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -72,6 +73,8 @@ jobs:
             if curl -fsS http://localhost:9933/api/health; then echo; break; fi
             sleep 2
           done
+          # Outside the loop's `if`: an unhealthy server (e.g. a dead pipeline task) fails the build.
+          curl -fsS http://localhost:9933/api/health || { docker logs bookclub-ci; exit 1; }
           curl -fsS http://localhost:9933/ > /dev/null
           curl -fsS http://localhost:9933/api/status
           docker logs bookclub-ci
@@ -93,7 +96,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push Docker image
@@ -104,6 +107,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: CLAUDE_CLI_REFRESH=${{ github.run_id }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

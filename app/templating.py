@@ -25,7 +25,8 @@ def localtime(value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> Markup:
     if not value:
         return Markup("")
     iso = value.isoformat(timespec="seconds") + "Z"
-    return Markup(f'<time class="bc-time" datetime="{escape(iso)}">{escape(value.strftime(fmt))} UTC</time>')
+    seconds = " data-bc-seconds" if "%S" in fmt else ""
+    return Markup(f'<time class="bc-time" datetime="{escape(iso)}"{seconds}>{escape(value.strftime(fmt))} UTC</time>')
 
 
 templates.env.globals["asset_version"] = _asset_version()

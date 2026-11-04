@@ -45,7 +45,7 @@ def forum(monkeypatch, settings):
     sent = []
     monkeypatch.setattr(br, "search_nzbs", lambda source, term: [{"nzb_hash": "h1", "title": term, "source": source}])
     monkeypatch.setattr(br, "fetch_nzb", lambda source, h, t: b"<nzb><file/></nzb>")
-    monkeypatch.setattr(br, "submit_to_nzbget", lambda db, content, name, password: sent.append((name, password)) or 55)
+    monkeypatch.setattr(br, "submit_to_nzbget", lambda db, content, name, password, force=False: sent.append((name, password)) or 55)
     return sent
 
 

@@ -10,17 +10,20 @@ from app.templating import templates
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Plain `def` handlers: FastAPI runs them in a thread, so slow log queries don't
+# hold up the event loop (which also runs the background pipeline).
+
 VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
 DEFAULT_LOG_LIMIT = 50
 
 
 @router.get("", response_class=HTMLResponse)
-async def logs_page(request: Request, db: Session = Depends(get_db)):
+def logs_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("logs.html", {"request": request})
 
 
 @router.get("/entries", response_class=HTMLResponse)
-async def log_entries(
+def log_entries(
     request: Request,
     level: str = Query(default="ALL"),
     limit: int = Query(default=DEFAULT_LOG_LIMIT),
@@ -31,7 +34,7 @@ async def log_entries(
     q = db.query(LogEntry)
     if level.upper() in VALID_LEVELS:
         q = q.filter(LogEntry.level == level.upper())
-    if download.strip().lstrip("#").isdigit():
+    if download.strip().lstrip("#").isdecimal():
         q = q.filter(LogEntry.download_id == int(download.strip().lstrip("#")))
     if search.strip():
         q = q.filter(LogEntry.message.ilike(f"%{search.strip()}%"))
@@ -44,7 +47,7 @@ async def log_entries(
 
 
 @router.delete("", response_class=HTMLResponse)
-async def clear_logs(request: Request, db: Session = Depends(get_db)):
+def clear_logs(request: Request, db: Session = Depends(get_db)):
     db.query(LogEntry).delete()
     db.commit()
     logger.info("Log history cleared by user")

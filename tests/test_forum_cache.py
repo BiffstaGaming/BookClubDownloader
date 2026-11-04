@@ -106,7 +106,7 @@ def indexers(monkeypatch, settings):
     sent = []
     monkeypatch.setattr(br, "search_nzbs", lambda source, term: [{"nzb_hash": "h", "title": term, "source": source}])
     monkeypatch.setattr(br, "fetch_nzb", lambda *a: b"<nzb><file/></nzb>")
-    monkeypatch.setattr(br, "submit_to_nzbget", lambda db, content, name, password: sent.append((name, password)) or 77)
+    monkeypatch.setattr(br, "submit_to_nzbget", lambda db, content, name, password, force=False: sent.append((name, password)) or 77)
     return sent
 
 

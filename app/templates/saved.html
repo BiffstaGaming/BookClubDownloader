@@ -10,7 +10,7 @@
     </h4>
     <div class="text-muted small">
       Everything a thanked forum post revealed — search term, password and book details — kept for good
-      ({{ total }} saved). Send a book to NZBGet again (e.g. after losing files) without visiting the forum.
+      (<span id="saved-total">{{ total }}</span> saved). Send a book to NZBGet again (e.g. after losing files) without visiting the forum.
     </div>
   </div>
 
@@ -29,7 +29,7 @@
         </form>
         <div class="d-flex align-items-center gap-2">
           <span class="text-muted small">Max rows:</span>
-          <select name="limit" form="saved-controls" class="form-select form-select-sm" style="width:auto;"
+          <select name="limit" id="saved-limit" form="saved-controls" class="form-select form-select-sm" style="width:auto;"
                   hx-get="/saved/rows" hx-trigger="change" hx-target="#saved-rows" hx-include="#saved-controls">
             <option value="50" selected>50</option>
             <option value="200">200</option>
@@ -48,7 +48,7 @@
                 <th class="text-end">Actions</th>
               </tr>
             </thead>
-            <tbody id="saved-rows" hx-get="/saved/rows" hx-trigger="load" hx-include="#saved-controls"></tbody>
+            <tbody id="saved-rows" hx-get="/saved/rows" hx-trigger="savedChanged" hx-include="#saved-controls"></tbody>
           </table>
         </div>
       </div>
@@ -58,4 +58,23 @@
   <!-- "Choose NZB" results -->
   <div class="col-12" id="saved-panel" data-bc-clear-when-empty></div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// The search and row count are remembered between visits, like Downloads and Logs.
+(function () {
+  var saved = bcStore.get('saved', {});
+  if (saved.q) document.getElementById('saved-q').value = saved.q;
+  if (saved.limit) document.getElementById('saved-limit').value = saved.limit;
+  function remember() {
+    bcStore.set('saved', { q: document.getElementById('saved-q').value,
+                           limit: document.getElementById('saved-limit').value });
+  }
+  document.getElementById('saved-q').addEventListener('input', remember);
+  document.getElementById('saved-limit').addEventListener('change', remember);
+  // After htmx has set the page up (its own ready handler runs first), load the rows.
+  document.addEventListener('DOMContentLoaded', function () { htmx.trigger('#saved-rows', 'savedChanged'); });
+})();
+</script>
 {% endblock %}

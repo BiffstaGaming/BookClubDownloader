@@ -79,8 +79,9 @@ def send_again(request: Request, post_id: int, db: Session = Depends(get_db)):
     if not get_setting(db, "nzbget_url"):
         return _row(request, db, post, alert_html("warning", "NZBGet is not configured — see Settings."))
     try:
+        # force: re-downloading on purpose, so NZBGet must not skip it as a duplicate
         dl = book_requests.send_post(db, post.as_revealed(), post.topic_id or "", post.msg_id or "",
-                                     post.topic_title or post.display_title)
+                                     post.topic_title or post.display_title, force=True)
     except book_requests.NoNzbFound as exc:
         return _row(request, db, post, alert_html(
             "warning", f"{exc}. Try 'Choose NZB', or open the post on the forum for a newer upload."))
@@ -126,4 +127,5 @@ def forget(post_id: int, db: Session = Depends(get_db)):
         logger.info("Saved post for '%s' removed", escape(post.display_title))
         db.delete(post)
         db.commit()
-    return HTMLResponse("")
+    # The row disappears; the count at the top is updated out-of-band.
+    return HTMLResponse(f'<span id="saved-total" hx-swap-oob="true">{db.query(RevealedPost).count()}</span>')

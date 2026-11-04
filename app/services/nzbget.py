@@ -60,6 +60,7 @@ class NzbgetClient:
         name: str,
         category: str = "",
         password: str = "",
+        dupe_mode: str = "SCORE",
     ) -> int:
         """
         Submit an NZB file to NZBGet.
@@ -98,7 +99,7 @@ class NzbgetClient:
             False,          # AddPaused
             "",             # DupeKey
             0,              # DupeScore
-            "SCORE",        # DupeMode
+            dupe_mode,      # DupeMode: SCORE normally, FORCE for a deliberate re-send
             pp_params,      # PPParameters
         ]
 

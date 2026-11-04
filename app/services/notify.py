@@ -114,17 +114,21 @@ def download_fields(dl) -> dict:
 
 def send_event_sync(event: str, **fields) -> bool:
     """Send an event if a webhook is configured and the event is wanted. Never raises."""
-    db = SessionLocal()
     try:
-        webhook_url = get_setting(db, "ha_webhook_url")
-        if not webhook_url or event not in enabled_events(db):
-            return False
-        link = bookclub_link(db, fields.get("download_id"), fields.get("request_id"))
-        fields.setdefault("bookclub_url", link)
-        if not fields.get("url"):
-            fields["url"] = fields.get("abs_url") or link
-    finally:
-        db.close()
+        db = SessionLocal()
+        try:
+            webhook_url = get_setting(db, "ha_webhook_url")
+            if not webhook_url or event not in enabled_events(db):
+                return False
+            link = bookclub_link(db, fields.get("download_id"), fields.get("request_id"))
+            fields.setdefault("bookclub_url", link)
+            if not fields.get("url"):
+                fields["url"] = fields.get("abs_url") or link
+        finally:
+            db.close()
+    except Exception as exc:  # e.g. the database is busy: skip this notification, never fail the caller
+        logger.warning("Home Assistant event %s not sent: %s", event, exc)
+        return False
     payload = build_payload(event, **fields)
     for attempt, delay in enumerate((*RETRY_DELAYS, None), 1):
         try:
@@ -146,12 +150,16 @@ def send_for_download(event: str, download_id: int, **fields) -> bool:
     """send_event_sync with the download's own details filled in."""
     from app.models import Download
 
-    db = SessionLocal()
     try:
-        dl = db.query(Download).filter(Download.id == download_id).first()
-        base = download_fields(dl) if dl else {"download_id": download_id}
-    finally:
-        db.close()
+        db = SessionLocal()
+        try:
+            dl = db.query(Download).filter(Download.id == download_id).first()
+            base = download_fields(dl) if dl else {"download_id": download_id}
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("Home Assistant event %s: could not read download #%s: %s", event, download_id, exc)
+        base = {"download_id": download_id}
     return send_event_sync(event, **{**base, **{k: v for k, v in fields.items() if v not in (None, "")}})
 
 

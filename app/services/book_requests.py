@@ -19,7 +19,7 @@ from app.models import BookRequest, Download
 from app.services import ai, forum_cache, library
 from app.services.matching import author_similarity, normalize, parse_nzb_name, title_similarity
 from app.services.nzb import fetch_nzb, search_nzbs, submit_to_nzbget
-from app.settings_store import get_bool, get_setting
+from app.settings_store import get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def split_query(query: str) -> tuple[str, str]:
     """'Project Hail Mary by Andy Weir' → ('Project Hail Mary', 'Andy Weir')."""
     text = re.sub(r"\s+", " ", (query or "").strip(" .?!"))
     text = re.sub(r"^(?:the\s+)?(?:audio\s*book|book)\s+", "", text, flags=re.I)
-    match = re.match(r"(.+?)\s+by\s+(.+)$", text, re.I)
+    match = re.match(r"(.+)\s+by\s+(.+)$", text, re.I)  # last " by ": "Murder by Death by Jane Smith"
     if match:
         return match.group(1).strip(), match.group(2).strip()
     return text, ""
@@ -133,7 +133,7 @@ def _choose_topic(db, req: BookRequest, topics: list[dict]) -> tuple[str, str]:
     ranked = rank_topics(req.query, topics)
     if clear_winner(ranked):
         return ranked[0]["topic_id"], f"best forum match ({ranked[0]['score']:.0%})"
-    if get_bool(db, "ai_pick_requests") and not ai.unavailable_reason(db):
+    if not ai.unavailable_reason(db, switch="ai_pick_requests"):
         try:
             pick = ai.pick_topic(db, req.query, ranked[:10])
             if pick["index"] is not None and pick["confidence"] >= AI_PICK_CONFIDENCE:
@@ -182,7 +182,7 @@ def _find_nzb(term: str) -> dict | None:
 
 
 def send_post(db, revealed: dict, topic_id: str = "", msg_id: str = "", post_title: str = "",
-              requested_by: str = None, request_id: int = None, before_send=None) -> Download:
+              requested_by: str = None, request_id: int = None, before_send=None, force: bool = False) -> Download:
     """
     Find the NZB for a revealed post's search term, send it to NZBGet and add
     the download row. Used by requests and by the Saved page's "Send again".
@@ -198,7 +198,7 @@ def send_post(db, revealed: dict, topic_id: str = "", msg_id: str = "", post_tit
     content = fetch_nzb(source, nzb["nzb_hash"], nzb.get("title", ""))
     safe_name = library.sanitize_filename(post_title or revealed.get("title") or nzb.get("title") or term)
     password = revealed.get("password", "")
-    job_id = submit_to_nzbget(db, content, safe_name, password)
+    job_id = submit_to_nzbget(db, content, safe_name, password, force=force)
     metadata = {k: revealed.get(k) for k in ("title", "author", "series", "series_part", "narrator") if revealed.get(k)}
     dl = Download(
         post_title=post_title or revealed.get("title") or term, topic_id=topic_id or None, msg_id=msg_id or None,
@@ -261,7 +261,7 @@ def run_request(request_id: int) -> tuple[str, dict] | None:
             book_title = revealed.get("title") or parse_nzb_name(post_title)[0]
             book_author = revealed.get("author") or ""
             if not req.force:
-                duplicates = find_duplicates(db, book_title, book_author, search_term=term)
+                duplicates = find_duplicates(db, book_title, book_author, search_term=term, include_failed=False)
                 if duplicates:
                     _set(db, req, "duplicate", "; ".join(duplicates))
                     return _event(req, "request_duplicate", title=book_title, author=book_author)
@@ -272,7 +272,7 @@ def run_request(request_id: int) -> tuple[str, dict] | None:
                     raise _Cancelled()
             try:
                 dl = send_post(db, revealed, topic_id, msg_id, post_title, req.requested_by, req.id,
-                               before_send=still_wanted)
+                               before_send=still_wanted, force=bool(req.force))
             except NoNzbFound as exc:
                 _set(db, req, "not_found", str(exc))
                 return _event(req, "request_not_found", title=book_title, author=book_author)

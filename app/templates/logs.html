@@ -40,7 +40,7 @@
               <option value="100">100</option>
               <option value="250">250</option>
               <option value="500">500</option>
-              <option value="0">All</option>
+              <option value="0">500 (most)</option>
             </select>
           </form>
 
@@ -122,13 +122,28 @@ function setLevelFilter(level) {
   });
   logControlsChanged();
 }
+// Keep expanded multi-line entries open when the list refreshes.
+var openLogs = new Set();
+document.body.addEventListener('htmx:beforeSwap', function (evt) {
+  if (evt.detail.target.id !== 'log-rows-wrap') return;
+  openLogs = new Set([...document.querySelectorAll('#log-rows-wrap details[open]')]
+    .map(function (d) { return d.closest('tr').dataset.logId; }));
+});
+document.body.addEventListener('htmx:afterSettle', function (evt) {
+  if (evt.detail.elt.id !== 'log-rows-wrap') return;
+  openLogs.forEach(function (id) {
+    var d = document.querySelector('#log-rows-wrap tr[data-log-id="' + id + '"] details');
+    if (d) d.open = true;
+  });
+});
+
 (function () {
   var saved = bcStore.get('logs', {}), url = new URLSearchParams(location.search);
   if (saved.limit) document.getElementById('log-limit').value = saved.limit;
   if (saved.search) document.getElementById('log-search').value = saved.search;
   // /logs?download=12 (from a download row) shows just that book.
   document.getElementById('log-download').value = url.get('download') || '';
-  setLevelFilter(saved.level || 'ALL');
+  document.addEventListener('DOMContentLoaded', function () { setLevelFilter(saved.level || 'ALL'); });
 })();
 </script>
 {% endblock %}

@@ -9,13 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.log_handler import log_to_db
-from app.models import BookRequest, Download
+from app.models import BookRequest, Download, LogEntry
 from app.services import book_requests, forum_cache, library
 from app.services.abs import AbsClient
 from app.services.matching import parse_nzb_name, rank_candidates
 from app.services.nzb import NzbError, fetch_nzb, search_nzbs, submit_to_nzbget
 from app.services.pipeline import (
-    apply_candidate, check_input_folder, enqueue, find_duplicates, pipeline, queue_positions,
+    apply_candidate, check_input_folder, enqueue, find_duplicates, mark_handled_by_hand, pipeline, queue_positions,
+    reset_auto_state,
 )
 from app.settings_store import AUDIBLE_PROVIDERS, get_setting
 from app.templating import templates
@@ -97,7 +98,7 @@ def send_to_nzbget(
     if not get_setting(db, "nzbget_url"):
         return not_configured("NZBGet")
 
-    replacing = _get(db, int(replace_id)) if replace_id.isdigit() else None
+    replacing = _get(db, int(replace_id)) if replace_id.isdecimal() else None
 
     if not replacing and force != "1":
         duplicates = find_duplicates(db, book_title or post_title, book_author, nzb_hash=nzb_hash, search_term=search_term)
@@ -112,7 +113,9 @@ def send_to_nzbget(
             form = "".join(f'<input type="hidden" name="{escape(k)}" value="{escape(v)}" />' for k, v in resend.items())
             reasons = "".join(f"<li>{escape(r)}</li>" for r in duplicates)
             return HTMLResponse(
-                '<div class="alert alert-warning"><i class="bi bi-exclamation-triangle-fill me-2"></i>'
+                '<div class="alert alert-warning alert-dismissible" role="alert">'
+                '<button type="button" class="btn-close btn-close-sm" data-bs-dismiss="alert" aria-label="Close"></button>'
+                '<i class="bi bi-exclamation-triangle-fill me-2"></i>'
                 f'<strong>Not sent — this looks like a duplicate:</strong><ul class="mb-2 mt-1">{reasons}</ul>'
                 f'<form hx-post="/downloads/send" hx-target="#download-status" hx-swap="innerHTML">{form}'
                 '<button type="submit" class="btn btn-sm btn-outline-warning">'
@@ -132,7 +135,8 @@ def send_to_nzbget(
         password = password or replacing.password or ""
         safe_name = replacing.nzb_name or safe_name
     try:
-        job_id = submit_to_nzbget(db, nzb_content, safe_name, password)
+        # A deliberate re-send ("Send anyway", another NZB) must not be dropped by NZBGet's duplicate check.
+        job_id = submit_to_nzbget(db, nzb_content, safe_name, password, force=bool(replacing) or force == "1")
     except Exception as exc:
         logger.error("Failed to send NZB '%s' to NZBGet: %s", safe_name, exc)
         if not replacing:
@@ -146,8 +150,8 @@ def send_to_nzbget(
         return alert("danger", f"Failed to send to NZBGet: {exc}")
 
     if replacing:
-        meta = replacing.parsed_metadata
-        for key in ("auto_processed", "match_confidence", "input_path"):
+        meta = reset_auto_state(replacing.parsed_metadata)
+        for key in ("match_confidence", "input_path"):
             meta.pop(key, None)
         replacing.set_metadata(meta)
         replacing.nzb_hash, replacing.nzb_source, replacing.nzb_title = nzb_hash, nzb_source, nzb_title
@@ -206,14 +210,12 @@ def retry_download(request: Request, download_id: int, db: Session = Depends(get
         return _rows(request, db, [dl])
     try:
         content = fetch_nzb(dl.nzb_source or "nzbking", dl.nzb_hash, dl.nzb_title or dl.nzb_name or "")
-        job_id = submit_to_nzbget(db, content, dl.nzb_name or f"bookclub-{dl.id}", dl.password or "")
+        job_id = submit_to_nzbget(db, content, dl.nzb_name or f"bookclub-{dl.id}", dl.password or "", force=True)
     except Exception as exc:
         dl.error_message = f"Retry failed: {exc}"
         db.commit()
         return _rows(request, db, [dl])
-    meta = dl.parsed_metadata
-    meta.pop("auto_processed", None)
-    dl.set_metadata(meta)
+    dl.set_metadata(reset_auto_state(dl.parsed_metadata))
     _reset_for_new_download(dl, job_id)
     db.commit()
     log_to_db("INFO", "download", f"#{dl.id}: re-sent to NZBGet (job {job_id})", download_id=dl.id)
@@ -254,7 +256,8 @@ def alternatives(request: Request, download_id: int, db: Session = Depends(get_d
 
 # ── requests ("find and download this book") ─────────────────────────────────
 
-def _request_rows(request: Request, db: Session, notice: str = ""):
+def _request_rows(request: Request, db: Session, notice: str | None = ""):
+    """The requests list. `notice` replaces the message above it; None (background refresh) leaves it alone."""
     rows = db.query(BookRequest).order_by(BookRequest.id.desc()).limit(8).all()
     return templates.TemplateResponse(
         "partials/request_rows.html", {"request": request, "requests": rows, "notice": notice})
@@ -262,7 +265,7 @@ def _request_rows(request: Request, db: Session, notice: str = ""):
 
 @router.get("/requests", response_class=HTMLResponse)
 def request_rows(request: Request, db: Session = Depends(get_db)):
-    return _request_rows(request, db)
+    return _request_rows(request, db, notice=None)
 
 
 @router.post("/requests", response_class=HTMLResponse)
@@ -280,7 +283,7 @@ def choose_request(request: Request, request_id: int, option: str = Form(default
     req = db.get(BookRequest, request_id)
     if not req:
         return _request_rows(request, db)
-    error = book_requests.choose(db, req, int(option) if option.isdigit() else None, force=force == "1")
+    error = book_requests.choose(db, req, int(option) if option.isdecimal() else None, force=force == "1")
     if error:
         return _request_rows(request, db, alert_html("warning", error))
     pipeline.run_soon(pipeline.process_request, req.id)
@@ -430,8 +433,8 @@ def apply_match(request: Request, download_id: int, candidate: str = Form(...), 
                 "asin", "isbn", "language", "genres", "cover_url"):
         meta.pop(key, None)  # don't mix fields from a previous, different match
     apply_candidate(meta, chosen)
+    mark_handled_by_hand(meta)
     meta["match_method"] = f"you ({meta.get('match_confidence')}% match)"
-    meta.pop("review_reason", None)
     dl.set_metadata(meta)
     db.commit()
     log_to_db("INFO", "metadata", f"#{download_id}: match chosen — '{meta.get('title')}' by '{meta.get('author')}'",
@@ -447,6 +450,7 @@ def _save_form(dl: Download, form: dict) -> dict:
     for key in _FORM_FIELDS:
         meta[key] = (form.get(key) or "").strip()
     meta.pop("output_file", None)  # destination now comes from the library template
+    mark_handled_by_hand(meta)  # an automatic match still running must not overwrite this
     dl.set_metadata(meta)
     return meta
 
@@ -552,6 +556,8 @@ def delete_download(download_id: int, db: Session = Depends(get_db)):
     dl = _get(db, download_id)
     if dl:
         pipeline.cancel(download_id)
+        # Its log goes too: SQLite can reuse the id, and a new book shouldn't inherit old entries.
+        db.query(LogEntry).filter(LogEntry.download_id == download_id).delete()
         db.delete(dl)
         db.commit()
     return HTMLResponse("")  # HTMX swaps the row with nothing, removing it
@@ -568,7 +574,7 @@ def conversion_log(download_id: int, db: Session = Depends(get_db)):
     return HTMLResponse(
         '<div class="bc-card"><div class="bc-card-header d-flex align-items-center gap-2">'
         f'<i class="bi bi-terminal text-accent"></i><span>Log — {escape(dl.display_title)}</span>'
-        '<button type="button" class="btn bc-btn-outline btn-sm ms-auto" '
+        '<button type="button" class="btn bc-btn-outline btn-sm ms-auto" title="Close" aria-label="Close" '
         'onclick="document.getElementById(\'convert-panel\').innerHTML=\'\'"><i class="bi bi-x-lg"></i></button>'
         f'</div><div class="bc-card-body">{error}{body}</div></div>'
     )

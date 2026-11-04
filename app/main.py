@@ -3,6 +3,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import engine, migrate_db
@@ -53,6 +54,20 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="BookClub Downloader", lifespan=lifespan)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.middleware("http")
+async def refuse_cross_site_changes(request: Request, call_next):
+    """
+    The web UI has no login, so stop other websites from driving it: browsers mark
+    a request another site made with `Sec-Fetch-Site: cross-site`. Only changes are
+    refused; Home Assistant's /api calls carry a token instead and send no such header.
+    """
+    if (request.method in ("POST", "PUT", "PATCH", "DELETE")
+            and not request.url.path.startswith("/api/")
+            and request.headers.get("sec-fetch-site") == "cross-site"):
+        return PlainTextResponse("Cross-site request refused", status_code=403)
+    return await call_next(request)
 
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(downloads.router, prefix="/downloads", tags=["downloads"])

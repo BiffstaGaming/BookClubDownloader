@@ -13,6 +13,8 @@ class Setting(Base):
 
 class Download(Base):
     __tablename__ = "downloads"
+    # Never reuse a deleted row's id (new databases; existing ones are guarded in the pipeline).
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     post_title = Column(String, nullable=True)
@@ -72,6 +74,7 @@ class BookRequest(Base):
     pipeline searches the forum, reveals the post, finds the NZB and sends it.
     """
     __tablename__ = "book_requests"
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     query = Column(String, nullable=False)

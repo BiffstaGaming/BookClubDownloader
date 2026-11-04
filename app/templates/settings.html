@@ -12,6 +12,12 @@
     placeholder="{{ '•••••••• saved — leave blank to keep' if secret_set.get(key) else placeholder }}"
     autocomplete="{{ autocomplete }}"
   />
+  {% if secret_set.get(key) %}
+  <div class="form-check mt-1">
+    <input class="form-check-input" type="checkbox" name="{{ key }}__clear" value="1" id="{{ key }}__clear" />
+    <label class="form-check-label small text-muted" for="{{ key }}__clear">Forget the saved value</label>
+  </div>
+  {% endif %}
 {% endmacro %}
 
 {% block content %}
@@ -520,7 +526,7 @@
                 <i class="bi bi-eye"></i>
               </button>
               <button type="button" class="btn bc-btn-outline" title="Copy"
-                      onclick="navigator.clipboard.writeText(document.getElementById('api_token_view').value); this.innerHTML='<i class=\'bi bi-check2\'></i>';">
+                      onclick="bcCopyToken(this)">
                 <i class="bi bi-clipboard"></i>
               </button>
               <button type="button" class="btn bc-btn-outline" title="Make a new token (the old one stops working)"
@@ -599,8 +605,10 @@
           </div>
           <div class="small text-muted mb-3">
             Today: {{ ai_usage.calls }} call(s){% if ai_usage.failures %}, {{ ai_usage.failures }} failed{% endif %}.
-            {% if ai_plan.get('five_hour') %}
-            Plan: {{ ai_plan.five_hour.percent }}% of 5-hour, {{ (ai_plan.get('seven_day') or {}).get('percent') }}% of 7-day.
+            {% set five = (ai_plan.get('five_hour') or {}).get('percent') %}
+            {% set seven = (ai_plan.get('seven_day') or {}).get('percent') %}
+            {% if five is not none or seven is not none %}
+            Plan:{% if five is not none %} {{ five }}% of 5-hour{% endif %}{% if five is not none and seven is not none %},{% endif %}{% if seven is not none %} {{ seven }}% of 7-day{% endif %}.
             {% endif %}
             {% if not claude_installed %}<span class="text-warning">The Claude Code CLI is not installed in this container.</span>{% endif %}
           </div>
@@ -654,4 +662,28 @@
     </form>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Copy the API token. navigator.clipboard only exists on https/localhost, so on a
+// plain-http LAN address fall back to selecting the field and copying that.
+function bcCopyToken(btn) {
+  var field = document.getElementById('api_token_view');
+  var done = function () {
+    btn.innerHTML = '<i class="bi bi-check2"></i>';
+    setTimeout(function () { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(field.value).then(done);
+    return;
+  }
+  var wasPassword = field.type === 'password';
+  field.type = 'text';
+  field.select();
+  try { document.execCommand('copy'); done(); } catch (e) {}
+  if (wasPassword) field.type = 'password';
+  field.blur();
+}
+</script>
 {% endblock %}

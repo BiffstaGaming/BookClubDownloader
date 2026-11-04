@@ -11,6 +11,9 @@ mkdir -p /app/data
 
 if [ "$PUID" != "0" ]; then
     chown -R "$PUID:$PGID" /app/data
+    # The default M4B working folder lives in the image; let PUID write to it.
+    # (A folder you mount there keeps its own owner.)
+    if ! mountpoint -q /m4b 2>/dev/null; then chown "$PUID:$PGID" /m4b 2>/dev/null || true; fi
     export HOME=/tmp
     echo "BookClub: running as uid=$PUID gid=$PGID umask=$(umask)"
     exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups -- "$@"

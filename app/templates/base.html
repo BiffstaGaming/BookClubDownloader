@@ -82,6 +82,9 @@
     </div>
   </div>
 
+  <!-- Failed requests are reported here (see the script below) -->
+  <div id="bc-errors" style="position:fixed;top:56px;right:16px;z-index:10000;max-width:460px;"></div>
+
   <!-- Main content -->
   <main class="container-fluid px-4 pb-5">
     {% block content %}{% endblock %}
@@ -97,20 +100,53 @@
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/htmx.min.js"></script>
   <script>
     (function () {
-      // ── loading bar: counts requests, ignores background polling ([data-bc-quiet]) ──
+      // ── loading bar: counts requests you started; background polling is quiet ──
+      // The mark goes on the request itself (not the element), because the element
+      // is often replaced by its own response before htmx reports the request done.
       var inFlight = 0, bar = document.getElementById('global-indicator');
-      function quiet(elt) { return elt && elt.closest && elt.closest('[data-bc-quiet]'); }
       document.body.addEventListener('htmx:beforeRequest', function (evt) {
-        if (quiet(evt.detail.elt)) return;
-        evt.detail.elt.__bcCounted = true;
+        var elt = evt.detail.elt;
+        if (elt && elt.hasAttribute && elt.hasAttribute('data-bc-quiet')) return;
+        evt.detail.xhr.__bcCounted = true;
         inFlight++;
         bar.style.display = 'flex';
       });
       document.body.addEventListener('htmx:afterRequest', function (evt) {
-        if (!evt.detail.elt.__bcCounted) return;
-        evt.detail.elt.__bcCounted = false;
+        var xhr = evt.detail.xhr;
+        if (!xhr || !xhr.__bcCounted) return;
+        xhr.__bcCounted = false;
         inFlight = Math.max(0, inFlight - 1);
         if (!inFlight) bar.style.display = 'none';
+      });
+
+      // ── failed requests: say so instead of silently doing nothing ──
+      var lastError = 0;
+      function showError(text) {
+        if (Date.now() - lastError < 3000) return;  // one message per burst (e.g. while restarting)
+        lastError = Date.now();
+        var box = document.getElementById('bc-errors');
+        var el = document.createElement('div');
+        el.className = 'alert alert-danger alert-dismissible d-flex align-items-start shadow';
+        el.setAttribute('role', 'alert');
+        el.innerHTML = '<i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i><div class="flex-grow-1"></div>' +
+          '<button type="button" class="btn-close btn-close-sm ms-2" data-bs-dismiss="alert" aria-label="Close"></button>';
+        el.querySelector('.flex-grow-1').textContent = text;
+        box.appendChild(el);
+        setTimeout(function () { el.remove(); }, 15000);
+      }
+      document.body.addEventListener('htmx:responseError', function (evt) {
+        if (evt.detail.elt && evt.detail.elt.hasAttribute && evt.detail.elt.hasAttribute('data-bc-quiet')) return;
+        showError('Something went wrong (error ' + evt.detail.xhr.status + ') — the details are on the Logs page.');
+      });
+      document.body.addEventListener('htmx:sendError', function () {
+        showError('BookClub is not reachable — it may be restarting. Try again in a moment.');
+      });
+
+      // A result reported below a long list (e.g. "Send to NZBGet"): bring it into view.
+      document.body.addEventListener('htmx:afterSwap', function (evt) {
+        if (evt.detail.target && evt.detail.target.id === 'download-status' && evt.detail.target.textContent.trim()) {
+          evt.detail.target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
       });
 
       // ── alerts: success/info fade after a few seconds; every alert can be closed ──
@@ -133,10 +169,14 @@
       var fmt = new Intl.DateTimeFormat(undefined, {
         year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
       });
+      var fmtSeconds = new Intl.DateTimeFormat(undefined, {
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
       function localTimes(root) {
         (root || document).querySelectorAll('time.bc-time:not([data-bc-done])').forEach(function (el) {
           var d = new Date(el.getAttribute('datetime'));
-          if (!isNaN(d)) { el.textContent = fmt.format(d); el.title = d.toString(); }
+          var f = el.hasAttribute('data-bc-seconds') ? fmtSeconds : fmt;
+          if (!isNaN(d)) { el.textContent = f.format(d); el.title = d.toString(); }
           el.setAttribute('data-bc-done', '1');
         });
       }

@@ -4,11 +4,13 @@ import os
 import secrets
 
 from fastapi import APIRouter, Depends, Form, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse
 from markupsafe import escape
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models import Setting
 from app.routers.api import ensure_api_token
 from app.scrapers.abook import AbookScraper
 from app.services import ai, audio, library, notify
@@ -60,27 +62,62 @@ def settings_page(request: Request, saved: str = "", db: Session = Depends(get_d
     return _render(request, db)
 
 
-@router.post("")
-async def save_settings(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
+def _form_values(form) -> dict:
+    """The settings a submitted form changes: {key: value}."""
+    values = {}
     for key in SETTING_KEYS:
         if key in BOOL_KEYS:
-            set_setting(db, key, "1" if form.get(key) else "0")
+            values[key] = "1" if form.get(key) else "0"
             continue
         if key in MULTI_KEYS:
             if f"{key}__present" in form:
-                set_setting(db, key, ",".join(form.getlist(key)) or "none")
+                values[key] = ",".join(form.getlist(key)) or "none"
+            continue
+        if key in SECRET_KEYS and form.get(f"{key}__clear"):
+            values[key] = ""  # "Forget the saved value" ticked
             continue
         if key not in form:
             continue  # e.g. abs_library_id before libraries were fetched
         value = str(form.get(key, "")).strip()
         if key in SECRET_KEYS and not value:
             continue  # blank secret field = keep the saved value
-        set_setting(db, key, value)
+        values[key] = value
+    return values
 
+
+def _save_all(db: Session, values: dict) -> None:
+    """Write every changed setting in one transaction, so nothing reads half a save."""
+    rows = {row.key: row for row in db.query(Setting).filter(Setting.key.in_(list(values))).all()}
+    for key, value in values.items():
+        if key in rows:
+            rows[key].value = value
+        else:
+            db.add(Setting(key=key, value=value))
+    db.commit()
+
+
+@router.post("")
+async def save_settings(request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    # The database work runs off the event loop, which also runs the background pipeline.
+    await run_in_threadpool(_save_all, db, _form_values(form))
     logger.info("Settings saved")
     # Redirect so refreshing the page doesn't post the form again.
     return RedirectResponse("/settings?saved=1", status_code=303)
+
+
+def _saved_secret(db: Session, given: str, secret_key: str, **must_match: str) -> str:
+    """
+    The secret to test with: the one typed in, else the saved one — but only when
+    the address (and username) are the saved ones too. Otherwise the Test buttons
+    could send a saved password to any server someone types in.
+    """
+    if given:
+        return given
+    for key, value in must_match.items():
+        if value and value.strip().rstrip("/") != (get_setting(db, key) or "").strip().rstrip("/"):
+            return ""
+    return get_setting(db, secret_key)
 
 
 @router.post("/regenerate-token", response_class=HTMLResponse)
@@ -120,9 +157,10 @@ def test_nzbget(
     nzbget_password: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
+    nzbget_password = _saved_secret(db, nzbget_password, "nzbget_password",
+                                    nzbget_url=nzbget_url, nzbget_username=nzbget_username)
     nzbget_url = nzbget_url or get_setting(db, "nzbget_url")
     nzbget_username = nzbget_username or get_setting(db, "nzbget_username")
-    nzbget_password = nzbget_password or get_setting(db, "nzbget_password")
     if not nzbget_url:
         return alert("warning", "NZBGet URL is not configured.", classes="mb-0")
     try:
@@ -141,11 +179,13 @@ def test_abook(
     abook_password: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
+    abook_password = _saved_secret(db, abook_password, "abook_password",
+                                   abook_url=abook_url, abook_username=abook_username)
     abook_url = abook_url or get_setting(db, "abook_url")
     abook_username = abook_username or get_setting(db, "abook_username")
-    abook_password = abook_password or get_setting(db, "abook_password")
     if not abook_url or not abook_username or not abook_password:
-        return alert("warning", "abook.link URL, username and password are all required.", classes="mb-0")
+        return alert("warning", "abook.link URL, username and password are all required "
+                     "(type the password again when testing a different address or username).", classes="mb-0")
     try:
         if AbookScraper(abook_url, abook_username, abook_password).login():
             return alert("success", "Login successful!", classes="mb-0")
@@ -161,10 +201,11 @@ def fetch_abs_libraries(
     abs_token: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
+    abs_token = _saved_secret(db, abs_token, "abs_token", abs_url=abs_url)
     abs_url = abs_url or get_setting(db, "abs_url")
-    abs_token = abs_token or get_setting(db, "abs_token")
     if not abs_url or not abs_token:
-        return alert("warning", "ABS URL and API key are required.", classes="mb-0")
+        return alert("warning", "ABS URL and API key are required (type the key again when using a different "
+                     "address).", classes="mb-0")
     try:
         libraries = AbsClient(abs_url, abs_token).get_libraries()
         if not libraries:

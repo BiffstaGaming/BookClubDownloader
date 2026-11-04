@@ -42,7 +42,7 @@ def test_send_warns_about_duplicates_then_force_sends(client, db, settings, monk
     db.add(Download(status="downloaded", nzb_hash="abc", search_term="abook.ws-123", post_title="Old"))
     db.commit()
     monkeypatch.setattr(dl_router, "fetch_nzb", lambda *a: b"<nzb><file/></nzb>")
-    monkeypatch.setattr(dl_router, "submit_to_nzbget", lambda *a: 42)
+    monkeypatch.setattr(dl_router, "submit_to_nzbget", lambda *a, **k: 42)
 
     r = client.post("/downloads/send", data={"nzb_hash": "abc", "nzb_title": "t", "search_term": "abook.ws-123"})
     assert "duplicate" in r.text and 'name="force" value="1"' in r.text
@@ -62,7 +62,8 @@ def test_replace_nzb_updates_existing_row(client, db, settings, monkeypatch):
     db.add(dl)
     db.commit()
     monkeypatch.setattr(dl_router, "fetch_nzb", lambda *a: b"<nzb><file/></nzb>")
-    monkeypatch.setattr(dl_router, "submit_to_nzbget", lambda *a: 77)
+    sends = []
+    monkeypatch.setattr(dl_router, "submit_to_nzbget", lambda *a, **k: sends.append(k) or 77)
     r = client.post("/downloads/send", data={"nzb_hash": "new", "nzb_title": "t", "nzb_source": "binsearch",
                                              "replace_id": str(dl.id)})
     assert r.status_code == 200 and r.headers.get("HX-Trigger") == "refreshDownloads"
@@ -71,6 +72,7 @@ def test_replace_nzb_updates_existing_row(client, db, settings, monkeypatch):
     assert (dl.status, dl.nzbget_id, dl.nzb_hash, dl.nzb_source, dl.error_message) == ("sent", 77, "new", "binsearch", None)
     assert "auto_processed" not in dl.parsed_metadata
     assert db.query(Download).count() == 1
+    assert sends == [{"force": True}]  # a deliberate re-send skips NZBGet's duplicate check
 
 
 def test_apply_match_and_queue_conversion(client, db, tmp_path):

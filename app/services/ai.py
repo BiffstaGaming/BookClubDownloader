@@ -166,8 +166,16 @@ def plan_status(db) -> dict:
 
 
 def _record_windows(db, windows: dict) -> None:
+    """Remember the plan usage the CLI reported. A reading in an unexpected shape is skipped."""
     if not windows:
         return
+    try:
+        _store_windows(db, windows)
+    except Exception as exc:
+        logger.warning("Ignoring an unexpected Claude plan reading: %s", exc)
+
+
+def _store_windows(db, windows: dict) -> None:
     status = {"checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     for name in ("five_hour", "seven_day"):
         window = windows.get(name) or {}
@@ -194,10 +202,14 @@ def plan_pause_reason(db) -> str:
     return ""
 
 
-def unavailable_reason(db) -> str:
-    """Why Claude can't be asked right now, or "" if it can."""
-    if not get_bool(db, "ai_enabled"):
-        return "the AI reviewer is turned off"
+def unavailable_reason(db, switch: str = "ai_enabled") -> str:
+    """
+    Why Claude can't be asked right now, or "" if it can. `switch` is the setting
+    for the job: ai_enabled (match review) or ai_pick_requests (request topics).
+    """
+    if not get_bool(db, switch):
+        return ("the AI reviewer is turned off" if switch == "ai_enabled"
+                else "letting Claude pick request topics is turned off")
     if not oauth_token(db):
         return "no Claude token — run `claude setup-token` and paste it in Settings"
     if not cli_path():
@@ -207,9 +219,9 @@ def unavailable_reason(db) -> str:
     return plan_pause_reason(db)
 
 
-def ask(db, prompt: str) -> ClaudeResult:
+def ask(db, prompt: str, switch: str = "ai_enabled") -> ClaudeResult:
     """One call with the usage bookkeeping. Raises ClaudeError when unavailable or failed."""
-    reason = unavailable_reason(db)
+    reason = unavailable_reason(db, switch)
     if reason:
         raise ClaudeError(reason)
     today = usage(db)
@@ -339,7 +351,7 @@ Reply with only a JSON object: {{"choice": <topic number or null>, "confidence":
 def pick_topic(db, query: str, topics: list[dict]) -> dict:
     """Returns {"index": int | None, "confidence": int, "reason": str}."""
     listing = "\n".join(f"#{i}: {t.get('title', '')}" for i, t in enumerate(topics, 1))
-    result = ask(db, TOPIC_PROMPT.format(query=query, topics=listing))
+    result = ask(db, TOPIC_PROMPT.format(query=query, topics=listing), switch="ai_pick_requests")
     data = parse_json(result.text)
     choice = data.get("choice")
     index = choice - 1 if isinstance(choice, int) and not isinstance(choice, bool) and 1 <= choice <= len(topics) else None

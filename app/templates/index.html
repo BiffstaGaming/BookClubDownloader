@@ -96,7 +96,7 @@
   function bcClearSearch() {
     bcStore.del('search');
     history.replaceState(null, '', '/');
-    ['forum-results', 'post-detail', 'nzb-results'].forEach(function (id) {
+    ['forum-results', 'post-detail', 'nzb-results', 'local-topics'].forEach(function (id) {
       document.getElementById(id).innerHTML = '';
     });
     document.getElementById('forum-query').value = '';
@@ -110,6 +110,10 @@
     if (restoring) return;
     var path = evt.detail.path, params = evt.detail.parameters, state = bcSearchState();
     if (path === '/search/forum') {
+      // A new search: the previous book's post and NZB list no longer belong on screen.
+      ['post-detail', 'nzb-results', 'local-topics'].forEach(function (id) {
+        document.getElementById(id).innerHTML = '';
+      });
       bcSaveSearch({ q: params.query });
     } else if (path.indexOf('/search/topic/') === 0) {
       bcSaveSearch({ q: state.q, topic: path.split('/').pop() });

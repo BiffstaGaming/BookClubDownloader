@@ -134,7 +134,13 @@ def thank_post(
             topic = scraper.get_topic(topic_id)
     except Exception as exc:
         logger.error("Re-fetch topic error: %s", exc)
-        topic = {"topic_id": topic_id, "title": post_title, "posts": []}
+        # The thank worked — still show what it revealed (and run the NZB search).
+        topic = {"topic_id": topic_id, "title": post_title,
+                 "posts": [{"msg_id": msg_id, "subject": "", "author": "", "thank_href": "", "has_hidden": False,
+                            "revealed": revealed}]}
+    if not any(str(p.get("msg_id")) == str(msg_id) for p in topic.get("posts", [])):
+        topic.setdefault("posts", []).insert(0, {"msg_id": msg_id, "subject": "", "author": "", "thank_href": "",
+                                                 "has_hidden": False, "revealed": revealed})
 
     forum_cache.save_revealed(db, topic_id, msg_id, topic.get("title") or post_title, revealed)
 
