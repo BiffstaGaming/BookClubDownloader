@@ -33,6 +33,9 @@ jobs:
       - name: Unit tests
         run: pytest -q
 
+      - name: CDN files match their integrity hashes (a wrong hash silently disables them)
+        run: python tests/smoke/check_cdn_integrity.py
+
   build-and-release:
     needs: test
     runs-on: ubuntu-latest
