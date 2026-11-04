@@ -1,0 +1,78 @@
+{# The Wishlist page's content, shared by wishlist.html (desktop) and mobile/wishlist.html. #}
+<form class="bc-item" hx-post="/wishlist" hx-target="#wishlist-rows" hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.successful){this.querySelector('[name=query]').value='';this.querySelector('[name=author]').value='';}">
+  <div class="fw-semibold mb-2"><i class="bi bi-plus-circle text-accent me-1"></i>Watch the forum for…</div>
+  <div class="row g-2">
+    <div class="col-12 col-md-3">
+      <select name="kind" class="form-select bc-input" id="wish-kind" onchange="bcWishKind(this.value)">
+        <option value="book">A book</option>
+        <option value="author">New books by an author</option>
+        <option value="series">A series (every book you don't have)</option>
+      </select>
+    </div>
+    <div class="col-12 col-md-5">
+      <input type="text" name="query" id="wish-query" class="form-control bc-input" required minlength="2" autocomplete="off"
+             placeholder="Title and author, e.g. Project Hail Mary by Andy Weir" />
+    </div>
+    <div class="col-12 col-md-4 d-none" id="wish-author-wrap">
+      <input type="text" name="author" class="form-control bc-input" autocomplete="off" placeholder="Author (optional)" />
+    </div>
+  </div>
+  <div class="d-flex align-items-center gap-3 flex-wrap mt-2">
+    <div class="form-check form-switch mb-0">
+      <input class="form-check-input" type="checkbox" role="switch" id="wish-auto" name="auto_download" value="1" checked />
+      <label class="form-check-label small" for="wish-auto">Download automatically when found (off = just tell me)</label>
+    </div>
+    <button type="submit" class="btn bc-btn-primary ms-auto">
+      <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+      <i class="bi bi-eye me-1"></i>Watch</button>
+  </div>
+</form>
+
+<div id="wishlist-notice" class="mt-2" data-bc-clear-when-empty></div>
+
+<div class="bc-tabs mt-3" role="tablist">
+  <button type="button" class="bc-chip active" data-tab="watching" onclick="bcWishTab('watching')">Watching</button>
+  <button type="button" class="bc-chip" data-tab="series" onclick="bcWishTab('series')">Series in your library</button>
+</div>
+
+<div id="wish-tab-watching">
+  <div id="wishlist-rows" data-bc-quiet hx-get="/wishlist/rows"
+       hx-trigger="load, bcWishlist from:body, bcRequests from:body, every 30s [bcShouldPoll()]" hx-swap="innerHTML"></div>
+  <div class="small text-muted mt-2">
+    Checked every {{ check_hours }} hours (Settings → Background Processing). Found books go through the normal request,
+    so a book you already have is never downloaded twice.
+  </div>
+</div>
+
+<div id="wish-tab-series" class="d-none">
+  {% if abs_ready %}
+  <div id="series-rows"><div class="text-muted small py-3"><span class="spinner-border spinner-border-sm me-2"></span>Reading your library…</div></div>
+  {% else %}
+  <div class="text-muted small py-3">Connect Audiobookshelf in Settings to see the series in your library and what's missing.</div>
+  {% endif %}
+</div>
+
+<script>
+function bcWishKind(kind) {
+  var q = document.getElementById('wish-query');
+  q.placeholder = { book: 'Title and author, e.g. Project Hail Mary by Andy Weir',
+                    author: 'Author, e.g. Rina Kent', series: 'Series, e.g. Royal Elite' }[kind];
+  document.getElementById('wish-author-wrap').classList.toggle('d-none', kind !== 'series');
+}
+function bcWishTab(tab) {
+  document.querySelectorAll('.bc-tabs .bc-chip').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === tab); });
+  document.getElementById('wish-tab-watching').classList.toggle('d-none', tab !== 'watching');
+  document.getElementById('wish-tab-series').classList.toggle('d-none', tab !== 'series');
+  var rows = document.getElementById('series-rows');
+  if (tab === 'series' && rows && !rows.dataset.loaded) {
+    rows.dataset.loaded = '1';
+    htmx.ajax('GET', '/wishlist/series', { source: '#series-rows', target: '#series-rows', swap: 'innerHTML' });
+  }
+  bcStore.set('wishlist-tab', tab);
+}
+// htmx and bcStore load at the end of the page.
+document.addEventListener('DOMContentLoaded', function () {
+  bcWishTab(new URLSearchParams(location.search).get('tab') || bcStore.get('wishlist-tab', 'watching'));
+});
+</script>

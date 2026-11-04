@@ -10,7 +10,10 @@ Payload (fields are always present, empty when unknown):
    "url": "<ABS item link, else BookClub link>", "bookclub_url": "...", "abs_url": "...",
    "options": [...], "timestamp": "..."}
 
-Which events are sent is chosen in Settings (all by default).
+Which events are sent is chosen in Settings (all by default). The BookClub
+Home Assistant integration (custom_components/bookclub) registers its own webhook
+through the API; it receives every event and fires them on Home Assistant's event
+bus as `bookclub_event`.
 """
 import asyncio
 import logging
@@ -29,6 +32,7 @@ EVENTS = {
     "book_converted": "Converted to M4B",
     "download_completed": "Download finished",
     "download_failed": "Download failed",
+    "download_retrying": "Download failed — trying another NZB",
     "conversion_failed": "Conversion failed",
     "needs_review": "Needs a manual match",
     "abs_import_failed": "Audiobookshelf import failed",
@@ -37,6 +41,7 @@ EVENTS = {
     "request_not_found": "Request not found",
     "request_duplicate": "Request already in the library",
     "request_failed": "Request failed",
+    "wishlist_found": "Wishlist book on the forum",
     "test": "Test notification",
 }
 
@@ -112,13 +117,29 @@ def download_fields(dl) -> dict:
     }
 
 
+def _post_with_retries(webhook_url: str, payload: dict, event: str) -> bool:
+    for attempt, delay in enumerate((*RETRY_DELAYS, None), 1):
+        try:
+            post_webhook(webhook_url, payload)
+            return True
+        except Exception as exc:
+            if delay is None:
+                logger.warning("Home Assistant webhook failed for event %s after %d tries: %s", event, attempt, exc)
+                return False
+            time.sleep(delay)
+    return False
+
+
 def send_event_sync(event: str, **fields) -> bool:
-    """Send an event if a webhook is configured and the event is wanted. Never raises."""
+    """Send an event to the webhook(s) that want it. Never raises."""
     try:
         db = SessionLocal()
         try:
             webhook_url = get_setting(db, "ha_webhook_url")
-            if not webhook_url or event not in enabled_events(db):
+            if webhook_url and event not in enabled_events(db):
+                webhook_url = ""
+            integration_url = get_setting(db, "ha_integration_webhook_url") if event != "test" else ""
+            if not webhook_url and not integration_url:
                 return False
             link = bookclub_link(db, fields.get("download_id"), fields.get("request_id"))
             fields.setdefault("bookclub_url", link)
@@ -130,16 +151,10 @@ def send_event_sync(event: str, **fields) -> bool:
         logger.warning("Home Assistant event %s not sent: %s", event, exc)
         return False
     payload = build_payload(event, **fields)
-    for attempt, delay in enumerate((*RETRY_DELAYS, None), 1):
-        try:
-            post_webhook(webhook_url, payload)
-            return True
-        except Exception as exc:
-            if delay is None:
-                logger.warning("Home Assistant webhook failed for event %s after %d tries: %s", event, attempt, exc)
-                return False
-            time.sleep(delay)
-    return False
+    sent = False
+    for url in dict.fromkeys(u for u in (webhook_url, integration_url) if u):
+        sent = _post_with_retries(url, payload, event) or sent
+    return sent
 
 
 async def send_event(event: str, **fields) -> bool:

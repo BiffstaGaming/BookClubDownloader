@@ -1,0 +1,173 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to BookClub",
+        "description": "Enter the address of your BookClub server and the API token from BookClub's Settings → Home Assistant.",
+        "data": {
+          "url": "BookClub address",
+          "api_token": "API token"
+        },
+        "data_description": {
+          "url": "For example http://192.168.1.10:9933",
+          "api_token": "Shown in BookClub under Settings → Home Assistant."
+        }
+      },
+      "reauth_confirm": {
+        "title": "BookClub API token",
+        "description": "BookClub at {url} refused the API token. Copy the current one from BookClub's Settings → Home Assistant.",
+        "data": {
+          "api_token": "API token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach BookClub at that address.",
+      "invalid_auth": "BookClub refused the API token.",
+      "unknown": "BookClub gave an unexpected answer."
+    },
+    "abort": {
+      "already_configured": "This BookClub server is already set up.",
+      "reauth_successful": "The new API token works."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BookClub options",
+        "data": {
+          "scan_interval": "Status update interval (seconds)",
+          "send_events": "Send events to Home Assistant",
+          "install_sentences": "Install voice sentences"
+        },
+        "data_description": {
+          "send_events": "BookClub posts every event (book imported, request needs a choice, ...) to Home Assistant, fired as bookclub_event.",
+          "install_sentences": "Writes custom_sentences/en/bookclub.yaml so Assist understands \"download the audiobook ...\" and \"what is BookClub doing\". A file you wrote yourself is never overwritten."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "needs_attention": {
+        "name": "Needs attention"
+      }
+    },
+    "sensor": {
+      "state": {
+        "name": "Status",
+        "state": {
+          "converting": "Converting",
+          "downloading": "Downloading",
+          "queued": "Queued",
+          "searching": "Searching",
+          "attention": "Needs attention",
+          "idle": "Idle"
+        }
+      },
+      "downloading": { "name": "Downloading" },
+      "queued": { "name": "Waiting to convert" },
+      "converting": { "name": "Converting" },
+      "converting_progress": { "name": "Conversion progress" },
+      "needs_review": { "name": "Needs a manual match" },
+      "failed": { "name": "Failed" },
+      "imported_last_24h": { "name": "Imported in the last 24 hours" },
+      "last_converted": { "name": "Last converted" },
+      "last_imported": { "name": "Last imported" },
+      "last_imported_at": { "name": "Last import" },
+      "requests_searching": { "name": "Requests searching" },
+      "requests_waiting": { "name": "Requests waiting for a choice" },
+      "wishlist_watching": { "name": "Wishlist watching" },
+      "wishlist_found": { "name": "Wishlist found" },
+      "ai_calls_today": { "name": "AI calls today" },
+      "ai_plan_5h_percent": { "name": "AI plan used (5 hours)" },
+      "last_poll": { "name": "Last download check" }
+    }
+  },
+  "services": {
+    "request_book": {
+      "name": "Request a book",
+      "description": "Asks BookClub to find an audiobook on the forum and download it.",
+      "fields": {
+        "config_entry_id": {
+          "name": "BookClub server",
+          "description": "Only needed when more than one BookClub server is set up."
+        },
+        "query": {
+          "name": "Book",
+          "description": "Title, optionally with \"by <author>\"."
+        },
+        "requested_by": {
+          "name": "Requested by",
+          "description": "Who asked (shown in BookClub and sent back with its events). Defaults to the Home Assistant user."
+        },
+        "force": {
+          "name": "Even if already in the library",
+          "description": "Download it even when BookClub thinks the library already has it."
+        }
+      }
+    },
+    "choose_option": {
+      "name": "Choose a request option",
+      "description": "Picks one of the books a request offered (request_needs_choice).",
+      "fields": {
+        "config_entry_id": {
+          "name": "BookClub server",
+          "description": "Only needed when more than one BookClub server is set up."
+        },
+        "request_id": {
+          "name": "Request ID",
+          "description": "request_id from the event or from Request a book."
+        },
+        "option": {
+          "name": "Option",
+          "description": "The option number from the event's options list."
+        }
+      }
+    },
+    "cancel_request": {
+      "name": "Cancel a request",
+      "description": "Stops a request that has not been sent to the downloader yet.",
+      "fields": {
+        "config_entry_id": {
+          "name": "BookClub server",
+          "description": "Only needed when more than one BookClub server is set up."
+        },
+        "request_id": {
+          "name": "Request ID",
+          "description": "The request to cancel."
+        }
+      }
+    },
+    "add_to_wishlist": {
+      "name": "Add to wishlist",
+      "description": "Has BookClub watch the forum for a book, an author or a series.",
+      "fields": {
+        "config_entry_id": {
+          "name": "BookClub server",
+          "description": "Only needed when more than one BookClub server is set up."
+        },
+        "query": {
+          "name": "What to watch for",
+          "description": "A book title, an author or a series name."
+        },
+        "kind": {
+          "name": "Kind",
+          "description": "book, author or series."
+        },
+        "author": {
+          "name": "Author",
+          "description": "Narrows a book or series down to this author."
+        },
+        "auto_download": {
+          "name": "Download automatically",
+          "description": "Download as soon as it appears, instead of only notifying."
+        },
+        "requested_by": {
+          "name": "Requested by",
+          "description": "Who asked. Defaults to the Home Assistant user."
+        }
+      }
+    }
+  }
+}

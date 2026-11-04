@@ -13,6 +13,16 @@ SETTING_KEYS = [
     "nzbget_password",
     "nzbget_category",
     "nzbget_path_prefix",
+    "nzb_auto_retry",
+    "prowlarr_url",
+    "prowlarr_api_key",
+    "prowlarr_requests",
+    "qbit_url",
+    "qbit_username",
+    "qbit_password",
+    "qbit_category",
+    "qbit_path_prefix",
+    "qbit_local_prefix",
     "local_path_prefix",
     "m4b_output_path",
     "m4b_move_template",
@@ -21,6 +31,11 @@ SETTING_KEYS = [
     "m4b_channels",
     "m4b_samplerate",
     "encode_max_cores",
+    "encode_window_start",
+    "encode_window_end",
+    "encode_max_temp",
+    "timezone",
+    "audnexus_chapters",
     "delete_source",
     "abs_url",
     "abs_token",
@@ -40,15 +55,19 @@ SETTING_KEYS = [
     "ai_daily_limit",
     "ai_pause_above_percent",
     "ai_pick_requests",
+    "wishlist_check_hours",
+    "wishlist_max_per_check",
     "poll_interval",
     "log_retention_days",
 ]
 
 # Secrets are never rendered back into the settings page; a blank field keeps the saved value.
-SECRET_KEYS = {"abook_password", "nzbget_password", "abs_token", "claude_oauth_token"}
+SECRET_KEYS = {"abook_password", "nzbget_password", "abs_token", "claude_oauth_token", "prowlarr_api_key",
+               "qbit_password"}
 
 # Checkbox settings: an unticked box submits nothing, which means "0".
-BOOL_KEYS = {"delete_source", "auto_convert", "ai_enabled", "ai_pick_requests"}
+BOOL_KEYS = {"delete_source", "auto_convert", "ai_enabled", "ai_pick_requests", "audnexus_chapters",
+             "prowlarr_requests"}
 
 # Lists of checkboxes, stored comma-separated. Nothing ticked is stored as "none".
 MULTI_KEYS = {"ha_events"}
@@ -73,6 +92,11 @@ DEFAULTS = {
     "ai_daily_limit": "40",
     "ai_pause_above_percent": "60",
     "ai_pick_requests": "1",
+    "nzb_auto_retry": "2",
+    "prowlarr_requests": "1",
+    "audnexus_chapters": "1",
+    "wishlist_check_hours": "12",
+    "wishlist_max_per_check": "3",
 }
 
 # Claude Code model aliases, so the newest model of each kind is used.

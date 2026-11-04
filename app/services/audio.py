@@ -112,3 +112,119 @@ def describe_speed(audio_seconds: float, elapsed_seconds: float) -> str:
     if not audio_seconds or not elapsed_seconds:
         return f"in {fmt(elapsed_seconds)}"
     return f"{fmt(audio_seconds)} of audio in {fmt(elapsed_seconds)} ({audio_seconds / elapsed_seconds:.0f}× real time)"
+
+
+# ── when encoding may run: a time window, and a CPU temperature limit ────────
+
+# hwmon drivers that report the CPU itself (preferred over board/ACPI sensors)
+CPU_SENSORS = ("coretemp", "k10temp", "zenpower", "cpu_thermal", "cpu-thermal", "soc_thermal", "x86_pkg_temp")
+FALLBACK_SENSORS = ("acpitz",)
+COOL_DOWN_DEGREES = 5  # a paused encode resumes this far below the limit
+
+
+def _read_number(path: str) -> float | None:
+    try:
+        with open(path, encoding="ascii", errors="replace") as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _read_text(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def cpu_temperature(sys_root: str = "/sys/class") -> float | None:
+    """The hottest CPU sensor in °C, or None when the container can't see one."""
+    import glob
+
+    found: dict[str, list[float]] = {"cpu": [], "fallback": []}
+    for hw in glob.glob(os.path.join(sys_root, "hwmon", "hwmon*")):
+        name = _read_text(os.path.join(hw, "name"))
+        group = "cpu" if name in CPU_SENSORS else "fallback" if name in FALLBACK_SENSORS else ""
+        if not group:
+            continue
+        for f in glob.glob(os.path.join(hw, "temp*_input")):
+            value = _read_number(f)
+            if value:
+                found[group].append(value / 1000)
+    for zone in glob.glob(os.path.join(sys_root, "thermal", "thermal_zone*")):
+        kind = _read_text(os.path.join(zone, "type"))
+        group = "cpu" if kind in CPU_SENSORS else "fallback" if kind in FALLBACK_SENSORS else ""
+        value = _read_number(os.path.join(zone, "temp")) if group else None
+        if value:
+            found[group].append(value / 1000)
+    readings = found["cpu"] or found["fallback"]
+    return round(max(readings), 1) if readings else None
+
+
+def _parse_hhmm(text: str):
+    from datetime import time as dtime
+
+    try:
+        hours, minutes = (int(part) for part in (text or "").strip().split(":"))
+        return dtime(hours, minutes)
+    except (ValueError, TypeError):
+        return None
+
+
+def local_now(timezone_name: str):
+    """Now in the user's time zone (Settings), else the container's."""
+    from datetime import datetime
+
+    if timezone_name:
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(ZoneInfo(timezone_name)).replace(tzinfo=None)
+        except Exception:
+            logger.warning("Unknown time zone %r — using the container's clock", timezone_name)
+    return datetime.now()
+
+
+def in_window(now_time, start: str, end: str) -> bool:
+    """True when `now_time` is inside start–end (HH:MM). Either blank = any time. Spans midnight if end < start."""
+    begin, finish = _parse_hhmm(start), _parse_hhmm(end)
+    if begin is None or finish is None or begin == finish:
+        return True
+    if begin < finish:
+        return begin <= now_time < finish
+    return now_time >= begin or now_time < finish
+
+
+def encode_gate(settings: dict, temperature: float | None = None, now_time=None) -> str:
+    """
+    "" when encoding may start now, else why not. `settings` holds encode_window_start,
+    encode_window_end, encode_max_temp and timezone (as strings).
+    """
+    start, end = settings.get("encode_window_start", ""), settings.get("encode_window_end", "")
+    if now_time is None:
+        now_time = local_now(settings.get("timezone", "")).time()
+    if not in_window(now_time, start, end):
+        return f"waiting for the encoding hours ({start}–{end})"
+    limit = _read_limit(settings.get("encode_max_temp", ""))
+    if limit:
+        temperature = cpu_temperature() if temperature is None else temperature
+        if temperature is not None and temperature >= limit:
+            return f"CPU is {temperature:.0f}°C (limit {limit:.0f}°C) — waiting for it to cool down"
+    return ""
+
+
+def _read_limit(text: str) -> float | None:
+    try:
+        value = float(str(text).strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def temperature_limit(text: str) -> float | None:
+    return _read_limit(text)
+
+
+def restrictions_set(settings: dict) -> bool:
+    window = _parse_hhmm(settings.get("encode_window_start", "")) and _parse_hhmm(settings.get("encode_window_end", ""))
+    return bool(window) or bool(_read_limit(settings.get("encode_max_temp", "")))

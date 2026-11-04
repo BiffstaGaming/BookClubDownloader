@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Index
+from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, Index
 from app.database import Base
 
 
@@ -20,34 +20,53 @@ class Download(Base):
     post_title = Column(String, nullable=True)
     topic_id = Column(String, nullable=True)
     msg_id = Column(String, nullable=True)
-    search_term = Column(String, nullable=True)
+    search_term = Column(String, nullable=True, index=True)
     password = Column(String, nullable=True)
     nzb_name = Column(String, nullable=True)
-    nzb_hash = Column(String, nullable=True)
-    nzb_source = Column(String, nullable=True)       # "nzbking" or "binsearch" — needed to retry
+    nzb_hash = Column(String, nullable=True, index=True)
+    nzb_source = Column(String, nullable=True)       # "nzbking", "binsearch" or "prowlarr" — needed to retry
     nzb_title = Column(String, nullable=True)        # indexer subject — needed to retry binsearch
     nzbget_id = Column(Integer, nullable=True)
-    status = Column(String, default="sent")          # sent | downloaded | failed
+    status = Column(String, default="sent", index=True)  # sent | downloaded | failed
     error_message = Column(Text, nullable=True)      # human-readable reason for the latest failure
     missing_polls = Column(Integer, nullable=True)   # consecutive polls where NZBGet had no record
     raw_content = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     # M4B conversion fields
     download_path = Column(Text, nullable=True)
     download_metadata = Column(Text, nullable=True)  # JSON: title/author/series/narrator/asin/paths…
     download_progress = Column(Integer, nullable=True)  # 0-100 while status == "sent"
-    m4b_status = Column(String, nullable=True)       # queued | converting | converted | m4b_failed | move_failed
+    m4b_status = Column(String, nullable=True, index=True)  # queued | converting | converted | m4b_failed | move_failed
     m4b_progress = Column(Integer, nullable=True)
     m4b_path = Column(Text, nullable=True)
     conversion_log = Column(Text, nullable=True)
     queued_at = Column(DateTime, nullable=True)      # conversion queue order
     # Audiobookshelf import fields
-    abs_status = Column(String, nullable=True)       # pending | imported | not_found | failed | skipped
+    abs_status = Column(String, nullable=True, index=True)  # pending | imported | not_found | failed | skipped
     abs_item_id = Column(String, nullable=True)
     imported_at = Column(DateTime, nullable=True)    # when Audiobookshelf picked the book up
     # Who asked for it (Home Assistant requests), carried into every notification
     requested_by = Column(String, nullable=True)
     request_id = Column(Integer, nullable=True)
+    # The automatic match. auto_processed = it is finished with this book (matched and
+    # queued, or handed to a person); until then it may be waiting to try again.
+    auto_processed = Column(Boolean, nullable=False, default=False, index=True)
+    auto_attempts = Column(Integer, nullable=False, default=0)
+    auto_next_try = Column(DateTime, nullable=True)
+    review_reason = Column(Text, nullable=True)      # why a person is needed (shown on the Downloads page)
+    # Which program downloads it: NZBGet (usenet, the default) or qBittorrent (torrents).
+    client = Column(String, nullable=True)           # None / "nzbget" | "qbittorrent"
+    torrent_hash = Column(String, nullable=True)
+    indexer = Column(String, nullable=True)          # the indexer it came from, when not the forum
+
+    @property
+    def is_torrent(self) -> bool:
+        return self.client == "qbittorrent"
+
+    @property
+    def needs_review(self) -> bool:
+        """Finished downloading, not converted, and the automatic match handed it to a person."""
+        return self.status == "downloaded" and self.m4b_status is None and bool(self.auto_processed)
 
     @property
     def parsed_metadata(self) -> dict:
@@ -80,7 +99,7 @@ class BookRequest(Base):
     query = Column(String, nullable=False)
     requested_by = Column(String, nullable=True)
     # pending | searching | needs_choice | sent | duplicate | not_found | failed | cancelled
-    status = Column(String, default="pending")
+    status = Column(String, default="pending", index=True)
     message = Column(Text, nullable=True)
     options = Column(Text, nullable=True)            # JSON list of forum topics to choose from
     topic_id = Column(String, nullable=True)         # chosen (or picked) topic
@@ -182,4 +201,58 @@ class LogEntry(Base):
     __table_args__ = (
         Index("ix_logs_level", "level"),
         Index("ix_logs_created_at", "created_at"),
+        Index("ix_logs_download_id", "download_id"),
     )
+
+
+class WishlistItem(Base):
+    """
+    Something to watch the forum for, checked every few hours:
+      book    — a book that isn't on the forum yet; requested as soon as it appears
+      author  — new uploads by an author
+      series  — the books of a series you don't have yet (a followed series)
+    """
+    __tablename__ = "wishlist"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String, nullable=False, default="book")   # book | author | series
+    query = Column(String, nullable=False)                  # what to look for
+    author = Column(String, nullable=True)                  # narrows a series watch
+    auto_download = Column(Boolean, nullable=False, default=True)
+    status = Column(String, nullable=False, default="watching", index=True)  # watching | requested | done | paused
+    message = Column(Text, nullable=True)
+    requested_by = Column(String, nullable=True)
+    request_id = Column(Integer, nullable=True)
+    seen_topics = Column(Text, nullable=True)    # JSON: forum topic ids already handled
+    found = Column(Text, nullable=True)          # JSON: [{topic_id, title, number}] found, waiting for you
+    last_checked_at = Column(DateTime, nullable=True)
+    next_check_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    @staticmethod
+    def _load(value) -> list:
+        try:
+            data = json.loads(value) if value else []
+        except ValueError:
+            return []
+        return data if isinstance(data, list) else []
+
+    @property
+    def seen(self) -> list[str]:
+        return [str(t) for t in self._load(self.seen_topics)]
+
+    @property
+    def found_topics(self) -> list[dict]:
+        return [t for t in self._load(self.found) if isinstance(t, dict) and t.get("topic_id")]
+
+    def as_dict(self) -> dict:
+        def iso(value):
+            return value.isoformat(timespec="seconds") + "Z" if value else None
+        return {
+            "id": self.id, "kind": self.kind, "query": self.query, "author": self.author or "",
+            "auto_download": bool(self.auto_download), "status": self.status, "message": self.message or "",
+            "requested_by": self.requested_by or "", "request_id": self.request_id, "found": self.found_topics,
+            "last_checked_at": iso(self.last_checked_at), "next_check_at": iso(self.next_check_at),
+            "created_at": iso(self.created_at),
+        }

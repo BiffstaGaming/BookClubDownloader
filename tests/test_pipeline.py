@@ -122,7 +122,7 @@ def test_poll_low_confidence_needs_review(db, settings, clean_db):
     run(Pipeline().poll_once())
     dl = reload(db, dl_id)
     assert dl.m4b_status is None
-    assert dl.parsed_metadata["auto_processed"] is True
+    assert dl.auto_processed is True
     assert any(e["event"] == "needs_review" for e in clean_db)
 
 
@@ -342,11 +342,11 @@ def test_abs_import_not_found(db, settings):
 def test_upgrade_marks_old_downloads_as_handled(db, settings):
     old = make_download(db, status="downloaded", download_metadata=json.dumps({"title": "Old"}))
     Pipeline().recover()
-    assert reload(db, old).parsed_metadata["auto_processed"] is True
+    assert reload(db, old).auto_processed is True
     # Only once: later downloads are auto-processed normally
     new = make_download(db, status="downloaded")
     Pipeline().recover()
-    assert "auto_processed" not in reload(db, new).parsed_metadata
+    assert reload(db, new).auto_processed is False
 
 
 def test_stop_before_the_tool_starts(db, settings, tmp_path, monkeypatch):

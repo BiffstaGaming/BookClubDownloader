@@ -88,3 +88,70 @@ class AbsClient:
             item_id, provider, result.get("updated"),
         )
         return result
+
+    # ── library-wide reads (series gaps, health check) ───────────────────────
+    def library_items(self, library_id: str, page_size: int = 200, max_items: int = 20000) -> list:
+        """Every item in a library (minified), page by page."""
+        items, page = [], 0
+        while len(items) < max_items:
+            resp = self._get(f"/api/libraries/{library_id}/items",
+                             params={"limit": page_size, "page": page, "minified": 1})
+            resp.raise_for_status()
+            data = resp.json()
+            batch = data.get("results") or []
+            items += batch
+            total = data.get("total") or 0
+            if not batch or len(items) >= total:
+                break
+            page += 1
+        return items
+
+    def all_series(self, library_id: str, page_size: int = 100, max_series: int = 5000) -> list:
+        """Every series in a library, each with its books."""
+        series, page = [], 0
+        while len(series) < max_series:
+            resp = self._get(f"/api/libraries/{library_id}/series",
+                             params={"limit": page_size, "page": page, "sort": "name"})
+            resp.raise_for_status()
+            data = resp.json()
+            batch = data.get("results") or []
+            series += batch
+            if not batch or len(series) >= (data.get("total") or 0):
+                break
+            page += 1
+        return series
+
+    def search_series(self, library_id: str, query: str) -> list:
+        """Series matching a search: [{"series": {...}, "books": [libraryItem, ...]}]."""
+        resp = self._get(f"/api/libraries/{library_id}/search", params={"q": query, "limit": 25})
+        resp.raise_for_status()
+        return resp.json().get("series", []) or []
+
+    def update_media(self, item_id: str, payload: dict) -> dict:
+        """PATCH an item's metadata, e.g. {"metadata": {"series": [{"name": "X", "sequence": "3"}]}}."""
+        resp = requests.patch(f"{self.url}/api/items/{item_id}/media", headers=self.headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}
+
+
+def item_metadata(item: dict) -> dict:
+    return ((item or {}).get("media") or {}).get("metadata") or {}
+
+
+def item_series(item: dict) -> list[tuple[str, str]]:
+    """[(series name, sequence)] for a library item in any of the shapes ABS returns."""
+    md = item_metadata(item)
+    out = []
+    series = md.get("series")
+    if isinstance(series, dict):
+        series = [series]
+    if isinstance(series, list):
+        for s in series:
+            if isinstance(s, dict) and s.get("name"):
+                out.append((s["name"], str(s.get("sequence") or "")))
+    if not out and md.get("seriesName"):
+        # minified: "The Expanse #3, Other Series #1"
+        for part in str(md["seriesName"]).split(","):
+            name, _, seq = part.strip().rpartition(" #")
+            out.append((name, seq) if name else (part.strip(), ""))
+    return out

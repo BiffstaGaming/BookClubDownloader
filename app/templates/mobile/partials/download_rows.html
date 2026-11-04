@@ -5,17 +5,17 @@
 <div class="m-card m-dl" data-dl-id="{{ dl.id }}">
   <div class="d-flex gap-3">
     {% if meta.get('cover_url') %}
-    <img src="{{ meta.get('cover_url') }}" alt="" class="m-cover" loading="lazy" referrerpolicy="no-referrer" />
+    <img src="{{ cover_src(dl, meta) }}" alt="" class="m-cover" loading="lazy" referrerpolicy="no-referrer" />
     {% else %}
     <div class="m-cover"><i class="bi bi-book"></i></div>
     {% endif %}
     <div class="flex-grow-1" style="min-width:0;">
-      <div class="m-card-title">{{ meta.get('title') or dl.post_title or dl.nzb_name or "—" }}</div>
+      <div class="m-card-title">{{ parts.title(dl, meta) }}</div>
       {{ parts.details(dl, meta, show_path=False) }}
     </div>
   </div>
   <div class="mt-2 d-flex flex-wrap gap-1 align-items-center">
-    {{ parts.status(dl, meta, queue_positions, abs_url) }}
+    {{ parts.status(dl, meta, queue_positions, abs_url, encode_wait if dl.m4b_status == 'queued' else '', encode_note if dl.id == running_id else '') }}
   </div>
   <div class="small text-muted mt-2">{{ dl.created_at | localtime }}{% if dl.password %} · <i class="bi bi-key-fill"></i> {{ dl.password }}{% endif %}</div>
   <div class="m-actions">

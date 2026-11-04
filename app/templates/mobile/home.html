@@ -17,7 +17,7 @@
 
 <div id="request-notice"></div>
 <div id="request-rows" data-bc-quiet
-     hx-get="/downloads/requests" hx-trigger="load, every 10s, refreshRequests from:body" hx-swap="innerHTML"></div>
+     hx-get="/downloads/requests" hx-trigger="load, bcRequests from:body, refreshRequests from:body, every 10s [bcShouldPoll()]" hx-swap="innerHTML"></div>
 
-<div id="m-status" data-bc-quiet hx-get="/m/status" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>
+<div id="m-status" data-bc-quiet hx-get="/m/status" hx-trigger="load, bcDownloads from:body, bcRequests from:body, every 10s [bcShouldPoll()]" hx-swap="innerHTML"></div>
 {% endblock %}

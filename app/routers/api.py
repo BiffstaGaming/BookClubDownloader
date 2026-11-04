@@ -8,6 +8,11 @@ Need the API token (Settings → Home Assistant), sent as `Authorization: Bearer
   GET  /api/requests/{id}
   POST /api/requests/{id}/choose     {"option": 2}   (or {"topic_id": "123"}, or {"force": true} for a duplicate)
   POST /api/requests/{id}/cancel
+  GET  /api/wishlist                 what BookClub is watching the forum for
+  POST /api/wishlist                 {"query": "Rina Kent", "kind": "author", "auto_download": false}
+  DELETE /api/wishlist/{id}
+  PUT  /api/integration/webhook      {"url": "..."} — the Home Assistant integration's own webhook
+  DELETE /api/integration/webhook
 """
 import secrets
 from datetime import datetime, timedelta
@@ -19,8 +24,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import BookRequest, Download
-from app.services import ai, book_requests
+from app.models import BookRequest, Download, WishlistItem
+from app.services import ai, book_requests, wishlist
 from app.services.pipeline import pipeline, queue_positions
 from app.settings_store import get_setting, set_setting
 
@@ -73,12 +78,10 @@ def status(db: Session = Depends(get_db)):
     failed = (count(Download.status == "failed")
               + count(Download.m4b_status.in_(("m4b_failed", "move_failed")))
               + count(Download.abs_status.in_(("not_found", "failed"))))
-    needs_review = sum(
-        1 for dl in db.query(Download).filter(Download.status == "downloaded", Download.m4b_status.is_(None)).all()
-        if dl.parsed_metadata.get("auto_processed")
-    )
+    needs_review = count(Download.status == "downloaded", Download.m4b_status.is_(None),
+                         Download.auto_processed == True)  # noqa: E712 — SQL comparison
     positions = queue_positions(db)
-    queued_titles = [db.get(Download, i).display_title for i in sorted(positions, key=positions.get)][:10]
+    queued_titles = [db.get(Download, i).display_title for i in sorted(positions, key=positions.get)[:10]]
     imported_24h = count(Download.abs_status == "imported", Download.imported_at >= since)
     last = (db.query(Download).filter(Download.m4b_status == "converted")
             .order_by(Download.id.desc()).first())
@@ -120,6 +123,11 @@ def status(db: Session = Depends(get_db)):
         # Only known while something is downloading (that's when NZBGet is asked); null otherwise.
         "nzbget_reachable": pipeline.nzbget_reachable,
         "last_poll": pipeline.last_poll_at.isoformat(timespec="seconds") + "Z" if pipeline.last_poll_at else None,
+        "encoding_waiting": pipeline.encode_wait or None,
+        "encoding_note": pipeline.encode_note or None,
+        "wishlist_watching": db.query(func.count(WishlistItem.id)).filter(
+            WishlistItem.status.in_(wishlist.ACTIVE)).scalar() or 0,
+        "wishlist_found": db.query(func.count(WishlistItem.id)).filter(WishlistItem.status == "found").scalar() or 0,
         "ai_calls_today": ai.usage(db)["calls"],
         "ai_plan_5h_percent": (plan.get("five_hour") or {}).get("percent"),
     }
@@ -186,3 +194,60 @@ def cancel(request_id: int, db: Session = Depends(get_db)):
     req.updated_at = datetime.utcnow()
     db.commit()
     return req.as_dict()
+
+
+# ── wishlist ──────────────────────────────────────────────────────────────────
+
+class NewWish(BaseModel):
+    query: str = Field(min_length=2, max_length=200)
+    kind: str = "book"
+    author: str = ""
+    auto_download: bool = True
+    requested_by: str = ""
+
+
+@router.get("/wishlist", dependencies=[Depends(require_token)])
+def list_wishlist(db: Session = Depends(get_db)):
+    return [w.as_dict() for w in db.query(WishlistItem).order_by(WishlistItem.id.desc()).all()]
+
+
+@router.post("/wishlist", status_code=201, dependencies=[Depends(require_token)])
+def add_wish(body: NewWish, db: Session = Depends(get_db)):
+    if body.kind not in wishlist.KINDS:
+        raise HTTPException(status_code=422, detail=f"kind must be one of {', '.join(wishlist.KINDS)}")
+    item, error = wishlist.add_item(db, body.kind, body.query, body.author, body.auto_download, body.requested_by)
+    if error:
+        raise HTTPException(status_code=409, detail=error)
+    pipeline.run_soon(pipeline.check_wishlist_item, item.id)
+    return item.as_dict()
+
+
+@router.delete("/wishlist/{item_id}", dependencies=[Depends(require_token)])
+def remove_wish(item_id: int, db: Session = Depends(get_db)):
+    item = db.get(WishlistItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="No such wishlist entry")
+    db.delete(item)
+    db.commit()
+    return {"deleted": item_id}
+
+
+# ── the Home Assistant integration ────────────────────────────────────────────
+
+class Webhook(BaseModel):
+    url: str = Field(min_length=8, max_length=500)
+
+
+@router.put("/integration/webhook", dependencies=[Depends(require_token)])
+def set_integration_webhook(body: Webhook, db: Session = Depends(get_db)):
+    """The integration's own webhook: every event goes there too (your own webhook URL is left alone)."""
+    if not body.url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="The webhook URL must start with http:// or https://")
+    set_setting(db, "ha_integration_webhook_url", body.url)
+    return {"url": body.url}
+
+
+@router.delete("/integration/webhook", dependencies=[Depends(require_token)])
+def clear_integration_webhook(db: Session = Depends(get_db)):
+    set_setting(db, "ha_integration_webhook_url", "")
+    return {"url": ""}

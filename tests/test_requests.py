@@ -7,6 +7,7 @@ from app.models import BookRequest, Download
 import re
 
 from app.services import ai, book_requests as br, library
+from app.services import nzb as nzb_mod
 
 
 class FakeForum:
@@ -43,7 +44,7 @@ def forum(monkeypatch, settings):
     fake = FakeForum()
     monkeypatch.setattr(br, "_scraper", lambda db: fake)
     sent = []
-    monkeypatch.setattr(br, "search_nzbs", lambda source, term: [{"nzb_hash": "h1", "title": term, "source": source}])
+    monkeypatch.setattr(nzb_mod, "search_nzbs", lambda source, term: [{"nzb_hash": "h1", "title": term, "source": source}])
     monkeypatch.setattr(br, "fetch_nzb", lambda source, h, t: b"<nzb><file/></nzb>")
     monkeypatch.setattr(br, "submit_to_nzbget", lambda db, content, name, password, force=False: sent.append((name, password)) or 55)
     return sent
@@ -122,7 +123,7 @@ def test_cancelled_request_is_not_sent(db, forum, monkeypatch):
         other.commit()
         other.close()
         return [{"nzb_hash": "h1", "title": term, "source": source}]
-    monkeypatch.setattr(br, "search_nzbs", cancel_then_search)
+    monkeypatch.setattr(nzb_mod, "search_nzbs", cancel_then_search)
     assert br.run_request(req.id) is None
     assert forum == []
 

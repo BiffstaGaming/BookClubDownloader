@@ -1,0 +1,94 @@
+request_book:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: bookclub
+    query:
+      required: true
+      example: "Project Hail Mary by Andy Weir"
+      selector:
+        text:
+    requested_by:
+      required: false
+      example: "janet"
+      selector:
+        text:
+    force:
+      required: false
+      default: false
+      selector:
+        boolean:
+
+choose_option:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: bookclub
+    request_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 1000000000
+          mode: box
+    option:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: box
+
+cancel_request:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: bookclub
+    request_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 1000000000
+          mode: box
+
+add_to_wishlist:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: bookclub
+    query:
+      required: true
+      example: "Rina Kent"
+      selector:
+        text:
+    kind:
+      required: false
+      default: book
+      selector:
+        select:
+          options:
+            - book
+            - author
+            - series
+    author:
+      required: false
+      selector:
+        text:
+    auto_download:
+      required: false
+      default: true
+      selector:
+        boolean:
+    requested_by:
+      required: false
+      selector:
+        text:

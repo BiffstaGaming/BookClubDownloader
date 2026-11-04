@@ -8,6 +8,7 @@ from app.services import ai, book_requests as br, forum_cache, notify
 from app.services import pipeline as pl
 from app.services.pipeline import Pipeline
 from app.settings_store import get_setting
+from app.services import nzb as nzb_mod
 
 from test_pipeline import (  # noqa: F401 — `fakes` is an autouse fixture
     AUDIBLE, FakeAbs, _converted_setup, fake_run_success, fakes, make_download, reload, run,
@@ -91,7 +92,7 @@ def test_abridged_edition_never_auto_converts_even_with_a_low_threshold(db, sett
     dl_id = make_download(db, status="downloaded", download_path=str(src), post_title="Rob Jones - The Vatican Conspiracy")
     run(Pipeline().auto_process(dl_id))
     dl = reload(db, dl_id)
-    assert dl.m4b_status is None and "different length" in dl.parsed_metadata["review_reason"]
+    assert dl.m4b_status is None and "different length" in dl.review_reason
 
 
 def test_manual_choice_while_auto_match_runs_is_kept(db, settings, tmp_path, monkeypatch):
@@ -104,7 +105,8 @@ def test_manual_choice_while_auto_match_runs_is_kept(db, settings, tmp_path, mon
     def search_while_user_converts(self, title, author="", provider="audible"):
         other = pl.SessionLocal()
         row = other.get(Download, dl_id)
-        meta = pl.mark_handled_by_hand(row.parsed_metadata)
+        pl.mark_handled_by_hand(row)
+        meta = row.parsed_metadata
         meta["title"] = "Chosen By Hand"
         row.set_metadata(meta)
         pl.enqueue(row)
@@ -127,14 +129,12 @@ def test_no_audible_results_is_retried_twice_first(db, settings, tmp_path):
     dl_id = make_download(db, status="downloaded", download_path=str(src), post_title="Rob Jones - The Vatican Conspiracy")
     for _ in range(2):
         run(Pipeline().auto_process(dl_id))
-        meta = reload(db, dl_id).parsed_metadata
-        assert not meta.get("auto_processed") and meta.get("auto_next_try")
         dl = reload(db, dl_id)
-        meta["auto_next_try"] = ""
-        dl.set_metadata(meta)
+        assert not dl.auto_processed and dl.auto_next_try
+        dl.auto_next_try = None
         db.commit()
     run(Pipeline().auto_process(dl_id))
-    assert reload(db, dl_id).parsed_metadata["auto_processed"] is True
+    assert reload(db, dl_id).auto_processed is True
 
 
 def test_restart_while_filing_finishes_instead_of_reconverting(db, settings, tmp_path):
@@ -196,16 +196,18 @@ def test_retry_resets_the_automatic_match_state(client, db, settings, monkeypatc
     from app.routers import downloads as dl_router
     settings(nzbget_url="http://nzbget")
     dl = Download(status="failed", nzb_hash="h", nzb_name="x",
-                  download_metadata=json.dumps({"auto_processed": True, "auto_attempts": 5, "review_reason": "old"}))
+                  auto_processed=True, auto_attempts=5, review_reason="old",
+                  download_metadata=json.dumps({"match_method": "rules", "nzb_retries": 2}))
     db.add(dl)
     db.commit()
-    monkeypatch.setattr(dl_router, "fetch_nzb", lambda *a: b"<nzb><file/></nzb>")
+    monkeypatch.setattr(dl_router, "fetch_nzb", lambda *a, **k: b"<nzb><file/></nzb>")
     sends = []
     monkeypatch.setattr(dl_router, "submit_to_nzbget", lambda *a, **k: sends.append(k) or 9)
     client.post(f"/downloads/{dl.id}/retry-download")
     db.expire_all()
-    meta = db.get(Download, dl.id).parsed_metadata
-    assert not ({"auto_processed", "auto_attempts", "review_reason"} & set(meta))
+    row = db.get(Download, dl.id)
+    assert (row.auto_processed, row.auto_attempts, row.review_reason) == (False, 0, None)
+    assert not ({"match_method", "nzb_retries"} & set(row.parsed_metadata))
     assert sends == [{"force": True}]
 
 
@@ -259,7 +261,7 @@ def test_failed_downloads_do_not_block_a_request(db):
 def test_saved_send_again_forces_past_nzbget_duplicate_check(client, db, settings, monkeypatch):
     settings(nzbget_url="http://nzbget")
     post = forum_cache.save_revealed(db, "1", "11", "Topic", {"search_term": "abook.ws-1", "password": "pw"})
-    monkeypatch.setattr(br, "search_nzbs", lambda source, term: [{"nzb_hash": "h", "title": term, "source": source}])
+    monkeypatch.setattr(nzb_mod, "search_nzbs", lambda source, term: [{"nzb_hash": "h", "title": term, "source": source}])
     monkeypatch.setattr(br, "fetch_nzb", lambda *a: b"<nzb><file/></nzb>")
     forced = []
     monkeypatch.setattr(br, "submit_to_nzbget", lambda db, c, n, p, force=False: forced.append(force) or 3)

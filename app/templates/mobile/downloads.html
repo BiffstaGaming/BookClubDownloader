@@ -16,7 +16,7 @@
 
 <div id="download-rows" data-bc-quiet
      hx-post="/downloads/sync-status" hx-include="#dl-controls"
-     hx-trigger="every 10s, refreshDownloads from:body" hx-swap="innerHTML"></div>
+     hx-trigger="bcDownloads from:body, refreshDownloads from:body, every 10s [bcShouldPoll()]" hx-swap="innerHTML"></div>
 
 <!-- Convert / Find on Audible / Log / Other NZB open here, full screen -->
 <div id="convert-panel" class="m-sheet" data-bc-clear-when-empty></div>
@@ -46,7 +46,9 @@ function mSetFilter(filter) {
 }
 // A link from a notification or the Home tab picks the filter; otherwise the last one used.
 mApply(highlightId ? 'all' : (params.get('filter') || bcStore.get('m-downloads', 'active')));
-mLoad();
+// After htmx has set the page up (its ready handler runs first): a request started earlier
+// leaves its element marked as loading for good.
+document.addEventListener('DOMContentLoaded', mLoad);
 
 document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (!highlightId || evt.detail.elt.id !== 'download-rows') return;

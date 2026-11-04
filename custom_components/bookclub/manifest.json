@@ -1,0 +1,13 @@
+{
+  "domain": "bookclub",
+  "name": "BookClub",
+  "codeowners": ["@BiffstaGaming"],
+  "config_flow": true,
+  "dependencies": ["webhook"],
+  "documentation": "https://github.com/BiffstaGaming/Book-Club-Downloader",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/BiffstaGaming/Book-Club-Downloader/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

@@ -78,6 +78,12 @@ Assistant API needs its own token.
   - Otherwise the AI reviewer (if on) gets a look, and failing that the row says
     *Needs review* with the reason: click *Convert*, then *Find on Audible* to
     pick the right edition (covers, narrator, series, length).
+  - A book waiting for you is labelled *Best guess* (the closest Audible match,
+    not yet confirmed) and its button says *Review & convert*.
+  - When NZBGet fails a download with missing articles, damage or an unpack
+    failure, BookClub sends the next-best upload of the same post by itself
+    (*Settings → NZBGet → try another NZB*, 2 times by default). NZBs are chosen
+    M4B first, then complete (largest) and newest. A wrong password is not retried.
   - Failed downloads stay listed with the reason (wrong password, missing
     articles, …) and *Retry* / *Other NZB* buttons.
   - Conversions run one at a time; *Dequeue* or *Stop* as needed. A restart
@@ -97,13 +103,59 @@ Assistant API needs its own token.
   has already seen are suggested. All of this means fewer requests to the forum.
 - The Search page, Downloads filters and Logs filters are remembered when you
   switch pages or tabs. Times are shown in your browser's timezone.
+- Pages update **live**: the server tells open pages what changed (one connection
+  per browser, shared by all its BookClub tabs), so progress appears straight away
+  and nothing is polled. A tab in the background does nothing until you come back
+  to it. Behind a reverse proxy, turn off response buffering for `/events` (or
+  BookClub falls back to checking every 10 seconds).
+- Bootstrap, the icons and htmx are served by BookClub itself, so the pages work
+  without internet access. Covers are kept on BookClub's disk after the first view.
+
+## Wishlist and series
+
+**Wishlist** (in the menu) watches the forum for you, every 12 hours by default
+(*Settings → Background Processing*):
+
+- **A book** that isn't on the forum yet: requested as soon as a topic matching it
+  appears.
+- **An author**: new uploads by them (what's already there when you start watching
+  isn't news).
+- **A series**: every book of it you don't have, as soon as it's on the forum,
+  lowest number first. "Have" means it's in Audiobookshelf or your download history.
+
+With *Download automatically* off, found books are listed with a *Get* button and
+announced (`wishlist_found` event) instead. Found books go through the normal
+request, so a book you already have is never downloaded twice.
+
+The **Series in your library** tab lists every series in Audiobookshelf with the
+numbers you have and the gaps (*you have 1–3 and 6*). *What's on the forum?* shows
+the series' books on the forum with *Get* buttons; *Follow* adds it to the wishlist.
+
+## Library health
+
+**Library** (in the menu) reads your whole Audiobookshelf library and lists books
+with no cover, never matched to Audible, possible duplicates, series without a book
+number or with two books on the same number, low-bitrate audio, books made of many
+files, and books with no author. *Quick Match* fills empty details and the cover
+from Audible. *Ask Claude to suggest fixes* (with the AI reviewer set up) proposes
+series numbers and authors; nothing changes until you press *Approve* on each one.
+
+## Books that aren't on the forum (Prowlarr, qBittorrent)
+
+*Settings → Other Indexers & Torrents*: with **Prowlarr** connected, the Search page
+gets a *Not on the forum?* box that searches all your usenet and torrent indexers
+at once (audiobook category), best match first. Usenet results go to NZBGet;
+torrent results go to **qBittorrent** (with its own path mapping). Requests from Home
+Assistant also try Prowlarr when the forum has nothing, and take a result only when
+it clearly is the requested book. Torrent downloads are converted like any other
+book, but their folder is never deleted: qBittorrent keeps seeding it.
 
 ## On your phone
 
 Phones get a separate layout at `/m` (opening any BookClub page on a phone goes
 there): a bottom tab bar with **Home** (get a book, what's happening now, recently
-added), **Search**, **Downloads** (cards, plus a *Needs me* filter), **Saved** and
-**More**. Panels such as *Convert* open full screen, and the Back button closes
+added), **Search**, **Downloads** (cards, plus a *Needs me* filter), **Wishlist** and
+**More** (Saved posts, Library health, Logs, Settings). Panels such as *Convert* open full screen, and the Back button closes
 them. In Chrome's menu, *Add to Home screen* gives it an app icon. *More → Use the
 desktop view* switches back to the full pages; *Phone view* in the desktop menu
 switches again.
@@ -123,6 +175,17 @@ e.g. *encoded, 11h 32m of audio in 3m 10s (219× real time)*.
   - **Use at most N cores** pins encoding to that many cores. The encoder always
     runs at low priority, so other services stay responsive. Fewer cores run
     cooler but take longer.
+  - **Only start encoding between** e.g. 01:00 and 07:00 holds MP3 books for the
+    night; books that are only copied or joined still go straight away. Uses the
+    time zone in Settings (filled in from your browser).
+  - **Pause encoding when the CPU reaches** e.g. 80 °C freezes the encoder (it isn't
+    stopped) until the CPU is 5 °C cooler, and holds new encodes while it's hot. The
+    Settings page shows the current reading; inside Docker the CPU sensors under
+    `/sys/class/hwmon` are normally visible without any extra setup.
+- **Chapters**: when a book's chapters are only "Chapter 1, 2, 3" or file names and
+  it has an Audible ASIN, BookClub writes Audible's real chapter names (from
+  Audnexus) — only when the running time matches, so they start in the right
+  places. *Settings → Audiobookshelf & Matching → Real chapter names*.
 
 ## AI reviewer (optional, on your Claude plan)
 
@@ -203,9 +266,9 @@ actions:
 The webhook URL is `http://<home-assistant>:8123/api/webhook/<webhook_id>`.
 
 Events (`trigger.json.event`): `book_imported`, `book_converted`,
-`download_completed`, `download_failed`, `conversion_failed`, `needs_review`,
-`abs_import_failed`, `request_sent`, `request_needs_choice`, `request_not_found`,
-`request_duplicate`, `request_failed`, `test`.
+`download_completed`, `download_failed`, `download_retrying`, `conversion_failed`,
+`needs_review`, `abs_import_failed`, `request_sent`, `request_needs_choice`,
+`request_not_found`, `request_duplicate`, `request_failed`, `wishlist_found`, `test`.
 
 Payload fields: `event`, `event_label`, `title`, `author`, `narrator`, `series`,
 `series_part`, `cover_url`, `download_id`, `request_id`, `requested_by`,
@@ -343,3 +406,65 @@ uvicorn app.main:app --reload --port 9933
 
 `tests/smoke/run_smoke.py` runs a real m4b-tool + tone conversion and is executed
 inside the built image by CI (`.github/workflows/release.yml`).
+
+## Home Assistant integration (HACS)
+
+Instead of the YAML above, Home Assistant can talk to BookClub through its own
+integration (`custom_components/bookclub`, Home Assistant 2024.8 or newer).
+
+Install: *HACS → ⋮ → Custom repositories*, add
+`https://github.com/BiffstaGaming/Book-Club-Downloader` with category
+*Integration*, download **BookClub** and restart Home Assistant. Then *Settings →
+Devices & services → Add integration → BookClub*, enter the BookClub address
+(e.g. `http://192.168.1.10:9933`) and the API token from *Settings → Home
+Assistant*. The integration's options set the update interval (30 s), whether
+BookClub sends its events to Home Assistant, and whether to install the voice
+sentences.
+
+**Sensors** (one BookClub device): Status (`converting`, `downloading`, `queued`,
+`searching`, `attention`, `idle`, with the queue, current conversion and counts as
+attributes), Downloading, Waiting to convert, Converting, Conversion progress,
+Needs a manual match, Failed, Imported in the last 24 hours, Last converted, Last
+imported, Last import (time), Requests searching, Requests waiting for a choice,
+Wishlist watching, Wishlist found, and diagnostic AI calls today, AI plan used (5
+hours) and Last download check. A **Needs attention** binary sensor is on while
+anything failed, needs a manual match or waits for a choice.
+
+**Actions**: `bookclub.request_book` (`query`, optional `requested_by`, `force`;
+returns the request, with its `id`, when called with a response),
+`bookclub.choose_option` (`request_id`, `option`), `bookclub.cancel_request`
+(`request_id`) and `bookclub.add_to_wishlist` (`query`, `kind`: book/author/series,
+optional `author`, `auto_download`). With more than one BookClub server set up,
+pass `config_entry_id`.
+
+**Events**: the integration registers its own webhook with BookClub, and every
+BookClub event arrives on the event bus as `bookclub_event` with the payload
+fields listed under *Notifications* (plus `config_entry_id`) — no webhook
+automation needed:
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: bookclub_event
+    event_data:
+      event: book_imported
+actions:
+  - action: notify.notify
+    data:
+      title: "New audiobook: {{ trigger.event.data.title }}"
+      message: "{{ trigger.event.data.author }}"
+```
+
+The webhook only accepts calls from the local network, so BookClub must reach Home
+Assistant's local URL (*Settings → System → Network*).
+
+**Voice**: the integration adds two Assist intents, `BookClubRequestBook` ("download
+the audiobook Project Hail Mary") and `BookClubStatus` ("what is BookClub doing"),
+and writes `custom_sentences/en/bookclub.yaml` for them. It never overwrites a
+`bookclub.yaml` it didn't write — if you made one from the *Voice* example above,
+delete it (and the `intent_script`) to use the integration's sentences. AI
+conversation agents with *Assist* control can use both intents directly.
+
+Tests: `pip install pytest-homeassistant-custom-component hassil`, then
+`pytest tests_ha` (`.github/workflows/home-assistant.yml` also runs hassfest and
+the HACS check).

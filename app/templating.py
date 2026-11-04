@@ -53,5 +53,14 @@ def localtime(value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> Markup:
     return Markup(f'<time class="bc-time" datetime="{escape(iso)}"{seconds}>{escape(value.strftime(fmt))} UTC</time>')
 
 
+def cover_src(dl, meta: dict = None) -> str:
+    """A download's cover, served from BookClub's cache ("" when it has none)."""
+    url = ((meta if meta is not None else dl.parsed_metadata) or {}).get("cover_url") if dl else ""
+    if not url:
+        return ""
+    return f"/covers/{dl.id}?v={hashlib.sha1(url.encode('utf-8')).hexdigest()[:10]}"
+
+
 templates.env.globals["asset_version"] = _asset_version()
+templates.env.globals["cover_src"] = cover_src
 templates.env.filters["localtime"] = localtime

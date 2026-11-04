@@ -1,0 +1,43 @@
+{# The series in your Audiobookshelf library, gaps first (desktop and phone). #}
+{% if series %}
+<div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+  <input type="search" class="form-control form-control-sm bc-input" style="max-width:320px;" placeholder="Filter series…"
+         oninput="var q=this.value.toLowerCase();document.querySelectorAll('#series-rows [data-series]').forEach(function(el){el.classList.toggle('d-none', el.dataset.series.indexOf(q)<0);});" />
+  <span class="small text-muted">{{ series | length }} series · {{ series | selectattr("gaps") | list | length }} with missing books</span>
+  <button class="btn bc-btn-outline btn-sm ms-auto" hx-get="/wishlist/series?refresh=1" hx-target="#series-rows" hx-swap="innerHTML">
+    <i class="bi bi-arrow-repeat me-1"></i>Reload from Audiobookshelf</button>
+</div>
+{% for s in series %}
+<div class="bc-item" data-series="{{ (s.name ~ ' ' ~ s.author) | lower }}">
+  <div class="d-flex align-items-start gap-2 flex-wrap">
+    <div class="flex-grow-1 min-w-0">
+      <div class="fw-semibold text-break">{{ s.name }}</div>
+      {% if s.author %}<div class="small text-muted">{{ s.author }}</div>{% endif %}
+      <div class="mt-1">
+        {% for n in s.have %}<span class="bc-number" title="In your library">#{{ n }}</span>{% endfor %}
+        {% for n in s.gaps %}<span class="bc-number missing" title="Missing">#{{ n }}</span>{% endfor %}
+      </div>
+      {% if s.gaps %}<div class="small text-warning">Missing {{ s.gaps | length }} book{{ '' if s.gaps | length == 1 else 's' }} before #{{ s.have[-1] }}</div>{% endif %}
+    </div>
+    <div class="d-flex gap-1 flex-wrap">
+      <button class="btn bc-btn-sm-primary" hx-get="/wishlist/series/forum" hx-vals='{{ {"name": s.name, "author": s.author} | tojson }}'
+              hx-target="#series-forum-{{ loop.index }}" hx-swap="innerHTML">
+        <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+        <i class="bi bi-search me-1"></i>What's on the forum?</button>
+      {% if s.followed %}
+      <span class="badge bc-badge-success align-self-center"><i class="bi bi-check2 me-1"></i>Following</span>
+      {% else %}
+      <button class="btn bc-btn-outline btn-sm" hx-post="/wishlist" hx-vals='{{ {"kind": "series", "query": s.name, "auto_download": "1"} | tojson }}'
+              hx-target="#wishlist-rows" hx-swap="innerHTML"
+              hx-on::after-request="if(event.detail.successful){this.outerHTML='<span class=&quot;badge bc-badge-success align-self-center&quot;><i class=&quot;bi bi-check2 me-1&quot;></i>Following</span>'}"
+              title="Get every book of this series you don't have, as soon as it's on the forum">
+        <i class="bi bi-plus-circle me-1"></i>Follow</button>
+      {% endif %}
+    </div>
+  </div>
+  <div id="series-forum-{{ loop.index }}"></div>
+</div>
+{% endfor %}
+{% else %}
+<div class="text-center text-muted py-4"><i class="bi bi-collection fs-3 d-block mb-2"></i>No series in your Audiobookshelf library.</div>
+{% endif %}

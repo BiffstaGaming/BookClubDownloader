@@ -1,0 +1,31 @@
+{# A series' books on the forum, with the ones you have marked (under a series on the Wishlist page). #}
+<div class="mt-2 pt-2" style="border-top:1px solid var(--border);">
+  {% if topics %}
+  <div class="small text-muted mb-1">
+    On the forum: {{ topics | length }} book{{ '' if topics | length == 1 else 's' }}{% if missing %}, {{ missing | length }} you don't have{% else %} — you have them all{% endif %}.
+  </div>
+  {% for t in topics %}
+  <div class="d-flex align-items-center gap-2 py-1">
+    <span class="bc-number {{ '' if t.owned else 'missing' }}">#{{ t.number }}</span>
+    <span class="small flex-grow-1 text-break">{{ t.title }}</span>
+    {% if t.owned %}
+    <span class="small text-success text-nowrap"><i class="bi bi-check2 me-1"></i>Have it</span>
+    {% else %}
+    <span>
+      <button class="btn bc-btn-sm-primary text-nowrap" hx-post="/wishlist/request-topic"
+              hx-vals='{{ {"topic_id": t.topic_id, "title": t.title} | tojson }}' hx-target="this" hx-swap="outerHTML">
+        <i class="bi bi-download me-1"></i>Get</button>
+    </span>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="small text-muted">Nothing for “{{ name }}” on the forum{% if author %} by {{ author }}{% endif %}.</div>
+  {% endif %}
+  <div class="mt-1">
+    <button class="btn btn-link btn-sm p-0 text-muted" hx-get="/wishlist/series/forum"
+            hx-vals='{{ {"name": name, "author": author, "refresh": "1"} | tojson }}'
+            hx-target="closest div[id^='series-forum']" hx-swap="innerHTML">
+      <i class="bi bi-arrow-repeat me-1"></i>Ask the forum again (new uploads)</button>
+  </div>
+</div>

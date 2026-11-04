@@ -75,7 +75,7 @@
               data-bc-quiet
               hx-get="/logs/entries"
               hx-include="#log-controls"
-              hx-trigger="every 15s, logsChanged"
+              hx-trigger="bcLogs from:body, logsChanged, every 15s [bcShouldPoll()]"
               hx-swap="innerHTML"
             ></tbody>
           </table>

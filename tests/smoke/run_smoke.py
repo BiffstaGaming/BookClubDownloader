@@ -161,6 +161,27 @@ if os.path.isfile(expected_aac):
                                     expected_aac], capture_output=True, text=True).stdout.strip() or 0)
     check(17 <= seconds <= 19, f"joined book is ~18s long ({seconds:.1f}s)")
 
+# ── 2c. Audible chapter names written by the real tone (Audnexus answer faked) ──
+if os.path.isfile(expected_aac):
+    from app.services import chapters
+
+    named = f"{ROOT}/chapters-test.m4b"
+    shutil.copy(expected_aac, named)
+    fake = {"runtimeLengthMs": 18000, "chapters": [
+        {"startOffsetMs": 0, "title": "Opening Credits"},
+        {"startOffsetMs": 5000, "title": "Prologue: The Start"},
+        {"startOffsetMs": 11000, "title": "Chapter One"}]}
+    chapters.fetch = lambda asin, provider="audible": fake
+    os.makedirs(f"{ROOT}/chapter-work", exist_ok=True)
+    outcome = chapters.apply(named, "B0ABCDEFGH", "audible", f"{ROOT}/chapter-work")
+    check(outcome == "named 3 chapters from Audible", f"chapters applied ({outcome})")
+    written, _duration = chapters.read_chapters(named)
+    check([c["title"] for c in written] == ["Opening Credits", "Prologue: The Start", "Chapter One"],
+          f"chapter titles read back ({[c['title'] for c in written]})")
+    check([round(c["start"]) for c in written] == [0, 5, 11], f"chapter starts ({[c['start'] for c in written]})")
+    again = chapters.apply(named, "B0ABCDEFGH", "audible", f"{ROOT}/chapter-work")
+    check(again.startswith("kept the book's own"), f"named chapters are left alone ({again})")
+
 # ── 3. refusing to overwrite ─────────────────────────────────────────────────
 dup_src = f"{DOWNLOADS}/Duplicate"
 make_book(dup_src, 1)

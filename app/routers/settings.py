@@ -51,6 +51,8 @@ def _render(request: Request, db: Session, message: str = None, message_type: st
             "claude_installed": bool(ai.cli_path()),
             "env_token": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")),
             "cpu_cores": audio.available_cores(),
+            "cpu_temp": audio.cpu_temperature(),
+            "cool_down": audio.COOL_DOWN_DEGREES,
         },
     )
 
@@ -170,6 +172,38 @@ def test_nzbget(
     except Exception as exc:
         logger.error("NZBGet connection test error: %s", exc)
         return alert("danger", f"Error: {exc}", classes="mb-0")
+
+
+@router.post("/test-prowlarr", response_class=HTMLResponse)
+def test_prowlarr(prowlarr_url: str = Form(default=""), prowlarr_api_key: str = Form(default=""),
+                  db: Session = Depends(get_db)):
+    from app.services.prowlarr import ProwlarrClient
+
+    api_key = _saved_secret(db, prowlarr_api_key, "prowlarr_api_key", prowlarr_url=prowlarr_url)
+    url = prowlarr_url or get_setting(db, "prowlarr_url")
+    if not url or not api_key:
+        return alert("warning", "Prowlarr URL and API key are required (type the key again for a different address).",
+                     classes="mb-0")
+    try:
+        return alert("success", f"Connected: {ProwlarrClient(url, api_key).test()}.", classes="mb-0")
+    except Exception as exc:
+        return alert("danger", f"Prowlarr didn't answer: {exc}", classes="mb-0")
+
+
+@router.post("/test-qbit", response_class=HTMLResponse)
+def test_qbit(qbit_url: str = Form(default=""), qbit_username: str = Form(default=""),
+              qbit_password: str = Form(default=""), db: Session = Depends(get_db)):
+    from app.services.qbittorrent import QbitClient
+
+    password = _saved_secret(db, qbit_password, "qbit_password", qbit_url=qbit_url, qbit_username=qbit_username)
+    url = qbit_url or get_setting(db, "qbit_url")
+    if not url:
+        return alert("warning", "Enter the qBittorrent Web UI URL first.", classes="mb-0")
+    try:
+        version = QbitClient(url, qbit_username or get_setting(db, "qbit_username"), password).version()
+        return alert("success", f"Connected: qBittorrent {version}.", classes="mb-0")
+    except Exception as exc:
+        return alert("danger", f"qBittorrent didn't answer: {exc}", classes="mb-0")
 
 
 @router.post("/test-abook", response_class=HTMLResponse)

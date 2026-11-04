@@ -9,6 +9,7 @@ from app.models import BookRequest, Download, ForumSearch, RevealedPost
 from app.routers import search as search_router
 from app.services import book_requests as br, forum_cache
 from app.settings_store import set_setting
+from app.services import nzb as nzb_mod
 
 
 class CountingForum:
@@ -104,7 +105,7 @@ def test_forum_results_show_cache_note_and_saved_badge(client, db, settings, mon
 def indexers(monkeypatch, settings):
     settings(nzbget_url="http://nzbget")
     sent = []
-    monkeypatch.setattr(br, "search_nzbs", lambda source, term: [{"nzb_hash": "h", "title": term, "source": source}])
+    monkeypatch.setattr(nzb_mod, "search_nzbs", lambda source, term: [{"nzb_hash": "h", "title": term, "source": source}])
     monkeypatch.setattr(br, "fetch_nzb", lambda *a: b"<nzb><file/></nzb>")
     monkeypatch.setattr(br, "submit_to_nzbget", lambda db, content, name, password, force=False: sent.append((name, password)) or 77)
     return sent
@@ -124,7 +125,7 @@ def test_send_again_from_the_saved_page(client, db, indexers):
 
 def test_send_again_when_the_nzb_is_gone(client, db, indexers, monkeypatch):
     post = forum_cache.save_revealed(db, "1", "11", "x", REVEALED)
-    monkeypatch.setattr(br, "search_nzbs", lambda source, term: [])
+    monkeypatch.setattr(nzb_mod, "search_nzbs", lambda source, term: [])
     r = client.post(f"/saved/{post.id}/send").text
     assert "No NZB found" in r and db.query(Download).count() == 0
 

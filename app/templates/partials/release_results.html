@@ -1,0 +1,43 @@
+{# Prowlarr results (desktop and phone). Each is its own small form: Send posts only the result's id;
+   the download link (which carries the Prowlarr API key) stays on the server. #}
+{% if results %}
+<div class="small text-muted mb-2">{{ results | length }} result{{ '' if results | length == 1 else 's' }} for “{{ query }}”, best match first.</div>
+<div class="d-grid gap-2">
+  {% for r in results %}
+  <form class="bc-release" hx-post="/search/release" hx-target="find .bc-release-status" hx-swap="innerHTML">
+    <input type="hidden" name="guid" value="{{ r.guid }}" />
+    <input type="hidden" name="book_title" value="{{ book_title }}" />
+    <input type="hidden" name="book_author" value="{{ book_author }}" />
+    <div class="d-flex gap-2 align-items-start">
+      <div class="flex-grow-1" style="min-width:0;">
+        <div class="fw-semibold text-break">{{ r.title }}</div>
+        <div class="small text-muted mt-1 d-flex flex-wrap gap-1 align-items-center">
+          {% if r.protocol == "torrent" %}
+          <span class="badge bc-badge-muted"><i class="bi bi-magnet me-1"></i>Torrent</span>
+          {% else %}
+          <span class="badge bc-badge-muted"><i class="bi bi-hdd-network me-1"></i>Usenet</span>
+          {% endif %}
+          {% if r.score >= 0.85 %}<span class="badge bc-badge-success">Good match</span>{% endif %}
+          {% if "m4b" in r.title | lower %}<span class="badge bc-conf-mid">M4B</span>{% endif %}
+          <span>{{ r.indexer }}</span>
+          {% if r.size_label %}<span>· {{ r.size_label }}</span>{% endif %}
+          {% if r.age_days is not none %}<span>· {{ r.age_days | round | int }} days old</span>{% endif %}
+          {% if r.protocol == "torrent" and r.seeders is not none %}<span>· {{ r.seeders }} seeders</span>{% endif %}
+        </div>
+      </div>
+      {% if blocked.get(r.guid) %}
+      <span class="small text-warning text-end" style="max-width:9rem;">{{ blocked.get(r.guid) }}</span>
+      {% else %}
+      <button type="submit" class="btn bc-btn-sm-primary text-nowrap">
+        <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+        <i class="bi bi-send me-1"></i>Send
+      </button>
+      {% endif %}
+    </div>
+    <div class="bc-release-status mt-1" data-bc-clear-when-empty></div>
+  </form>
+  {% endfor %}
+</div>
+{% else %}
+<div class="text-muted small"><i class="bi bi-inbox me-1"></i>Your indexers have nothing for “{{ query }}”.</div>
+{% endif %}

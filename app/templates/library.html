@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}BookClub — Library{% endblock %}
+
+{% block content %}
+<div class="row g-4 justify-content-center">
+  <div class="col-12 col-xl-10">
+    <h4 class="page-title mb-4"><i class="bi bi-heart-pulse me-2 text-accent"></i>Library health</h4>
+    <div class="bc-card">
+      <div class="bc-card-header d-flex align-items-center gap-2 flex-wrap">
+        <span class="small text-muted flex-grow-1">
+          Looks through your whole Audiobookshelf library for missing covers, unmatched books, duplicates,
+          series numbering problems and low-quality audio. Nothing is changed unless you press a button.
+        </span>
+        <button class="btn bc-btn-sm-primary" hx-post="/library/health/scan" hx-target="#health" hx-swap="innerHTML">
+          <i class="bi bi-search-heart me-1"></i>Check the library</button>
+      </div>
+      <div class="bc-card-body" id="health" hx-get="/library/health" hx-trigger="load" hx-swap="innerHTML"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function bcHealthFilter(button) {
+  document.querySelectorAll('.bc-tabs .bc-chip').forEach(function (b) { b.classList.toggle('active', b === button); });
+  var kind = button.dataset.kind;
+  document.querySelectorAll('#health-issues [data-kind]').forEach(function (el) {
+    el.classList.toggle('d-none', !!kind && el.dataset.kind !== kind);
+  });
+}
+</script>
+{% endblock %}

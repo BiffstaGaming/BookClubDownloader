@@ -1,0 +1,64 @@
+{# What BookClub watches the forum for (desktop and phone). Messages go above the list, out-of-band,
+   so the background refresh never wipes one you haven't read. #}
+{% set icons = {"book": "book", "author": "person", "series": "collection"} %}
+{% set states = {
+  "watching": ("bc-badge-muted", "eye", "Watching"),
+  "requested": ("bc-conf-mid", "hourglass-split", "Requested"),
+  "found": ("bc-conf-mid", "star-fill", "Found — waiting for you"),
+  "done": ("bc-badge-success", "check-circle-fill", "Got it"),
+  "paused": ("bc-badge-muted", "pause-circle", "Paused"),
+} %}
+{% if notice is not none %}<div id="wishlist-notice" hx-swap-oob="true">{% if notice %}{{ notice | safe }}{% endif %}</div>{% endif %}
+{% if items %}
+{% for item in items %}
+{% set cls, icon, label = states.get(item.status, ("bc-badge-muted", "dot", item.status)) %}
+<div class="bc-item" data-wish-id="{{ item.id }}">
+  <div class="d-flex align-items-start gap-2">
+    <i class="bi bi-{{ icons.get(item.kind, 'book') }} text-accent fs-5"></i>
+    <div class="flex-grow-1 min-w-0">
+      <div class="fw-semibold text-break">{{ item.query }}{% if item.author %} <span class="text-muted small fw-normal">· {{ item.author }}</span>{% endif %}</div>
+      <div class="small text-muted">
+        {{ kinds.get(item.kind, item.kind) }} ·
+        {% if item.auto_download %}downloads automatically{% else %}tells you, you choose{% endif %}
+        {% if item.last_checked_at %} · checked {{ item.last_checked_at | localtime }}{% endif %}
+      </div>
+      <div class="mt-1 d-flex flex-wrap align-items-center gap-2">
+        <span class="badge {{ cls }}"><i class="bi bi-{{ icon }} me-1"></i>{{ label }}</span>
+        {% if item.status == "requested" and req_status.get(item.request_id) == "needs_choice" %}
+        <a class="small text-warning" href="/downloads#requests">The request needs a choice →</a>
+        {% endif %}
+      </div>
+      {% if item.message %}<div class="small text-muted mt-1">{{ item.message }}</div>{% endif %}
+
+      {% for topic in item.found_topics %}
+      <div class="bc-found d-flex align-items-center gap-2">
+        <div class="flex-grow-1 small text-break">{% if topic.number %}<span class="bc-number missing">#{{ topic.number }}</span>{% endif %}{{ topic.title }}</div>
+        <button class="btn bc-btn-sm-primary text-nowrap" hx-post="/wishlist/{{ item.id }}/get"
+                hx-vals='{{ {"topic_id": topic.topic_id} | tojson }}' hx-target="#wishlist-rows" hx-swap="innerHTML">
+          <i class="bi bi-download me-1"></i>Get</button>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="bc-item-actions">
+    <button class="btn bc-btn-outline btn-sm" hx-post="/wishlist/{{ item.id }}/check" hx-target="#wishlist-rows"
+            hx-swap="innerHTML" {% if item.status == "paused" %}disabled{% endif %}>
+      <i class="bi bi-arrow-repeat me-1"></i>Check now</button>
+    <button class="btn bc-btn-outline btn-sm" hx-post="/wishlist/{{ item.id }}/pause" hx-target="#wishlist-rows" hx-swap="innerHTML">
+      {% if item.status == "paused" %}<i class="bi bi-play-circle me-1"></i>Resume{% else %}<i class="bi bi-pause-circle me-1"></i>Pause{% endif %}</button>
+    <button class="btn bc-btn-outline btn-sm" hx-post="/wishlist/{{ item.id }}/auto" hx-target="#wishlist-rows" hx-swap="innerHTML"
+            title="{{ 'Stop downloading by itself — just tell me' if item.auto_download else 'Download what it finds by itself' }}">
+      {% if item.auto_download %}<i class="bi bi-bell me-1"></i>Just tell me{% else %}<i class="bi bi-lightning-charge me-1"></i>Download automatically{% endif %}</button>
+    <button class="btn btn-sm ms-auto" style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
+            hx-delete="/wishlist/{{ item.id }}" hx-target="#wishlist-rows" hx-swap="innerHTML"
+            hx-confirm="Stop watching for '{{ item.query }}'?"><i class="bi bi-trash3 me-1"></i>Remove</button>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="text-center text-muted py-4">
+  <i class="bi bi-stars fs-3 d-block mb-2"></i>
+  Nothing on your wishlist yet. Add a book that isn't on the forum, an author to watch, or follow a series —
+  BookClub checks the forum every {{ check_hours }} hours.
+</div>
+{% endif %}

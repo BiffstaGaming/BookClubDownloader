@@ -25,15 +25,26 @@ from sqlalchemy import or_
 from app.database import SessionLocal
 from app.log_handler import log_to_db
 from app.models import BookRequest, Download, LogEntry
-from app.services import ai, audio, book_requests, library, notify
+from app.services import ai, audio, book_requests, chapters, library, notify, qbittorrent, releases
 from app.services.abs import AbsClient
 from app.services.matching import looks_like_series, normalize, parse_nzb_name, rank_candidates
+from app.services.nzb import NzbError, fetch_nzb, find_nzbs, submit_to_nzbget
 from app.services.nzbget import NzbgetClient
 from app.settings_store import get_bool, get_int, get_setting, set_setting
 
 logger = logging.getLogger(__name__)
 
 MISSING_POLLS_BEFORE_FAILURE = 6
+
+# NZBGet failures another upload of the same post can fix (not a wrong password,
+# a full disk or something deleted on purpose).
+RETRY_WITH_ANOTHER_NZB = {
+    "WARNING/DAMAGED", "WARNING/REPAIRABLE", "WARNING/HEALTH", "FAILURE/HEALTH", "FAILURE/PAR",
+    "FAILURE/UNPACK", "FAILURE/BAD", "FAILURE/SCAN", "FAILURE/FETCH", "DELETED/HEALTH", "DELETED/SCAN",
+}
+ENCODE_SETTING_KEYS = ("encode_window_start", "encode_window_end", "encode_max_temp", "timezone")
+TEMPERATURE_CHECK_SECONDS = 15
+WISHLIST_LOOP_SECONDS = 300
 
 # When Audible can't be searched (Audiobookshelf restarting, network blip), try
 # again after these many minutes before asking a person.
@@ -120,6 +131,9 @@ class Pipeline:
         self.nzbget_reachable: bool | None = None   # None = not asked lately (nothing downloading)
         self.last_prune: datetime | None = None
         self.last_poll_at: datetime | None = None
+        self.encode_wait = ""     # why queued encodes are waiting (hours / temperature), shown on the page
+        self.encode_note = ""     # e.g. "Paused — CPU 86°C" for the running conversion
+        self.qbit_error = ""
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     async def start(self):
@@ -129,6 +143,7 @@ class Pipeline:
         self.tasks = [
             asyncio.create_task(self._poll_loop(), name="bookclub-poller"),
             asyncio.create_task(self._worker_loop(), name="bookclub-worker"),
+            asyncio.create_task(self._wishlist_loop(), name="bookclub-wishlist"),
         ]
         db = SessionLocal()
         try:
@@ -183,9 +198,7 @@ class Pipeline:
             if get_setting(db, "pipeline_upgraded") != "1":
                 old = db.query(Download).filter(Download.status == "downloaded", Download.m4b_status.is_(None)).all()
                 for dl in old:
-                    meta = dl.parsed_metadata
-                    meta["auto_processed"] = True
-                    dl.set_metadata(meta)
+                    dl.auto_processed = True
                 set_setting(db, "pipeline_upgraded", "1")
                 if old:
                     log_to_db("INFO", "pipeline", f"Upgrade: {len(old)} earlier download(s) left for manual conversion")
@@ -233,7 +246,8 @@ class Pipeline:
         try:
             nzbget_url = get_setting(db, "nzbget_url")
             pending = db.query(Download).filter(
-                Download.status == "sent", Download.nzbget_id.isnot(None)
+                Download.status == "sent", Download.nzbget_id.isnot(None),
+                or_(Download.client.is_(None), Download.client != "qbittorrent"),
             ).all()
 
             if not pending:
@@ -257,19 +271,27 @@ class Pipeline:
                     self._apply_nzbget_state(db, pending, history, queue, completed, failed)
                     db.commit()
 
+            await self._poll_torrents(db, completed, failed)
+
             # Restart-safe: anything finished but never auto-matched gets matched now,
             # and a match that hit a temporary error is retried when it is due.
-            now = datetime.utcnow().isoformat()
-            for dl in db.query(Download).filter(Download.status == "downloaded", Download.m4b_status.is_(None)).all():
-                meta = dl.parsed_metadata
-                if not meta.get("auto_processed") and (meta.get("auto_next_try") or "") <= now:
-                    to_match.append(dl.id)
+            now = datetime.utcnow()
+            to_match = [row[0] for row in db.query(Download.id).filter(
+                Download.status == "downloaded", Download.m4b_status.is_(None),
+                Download.auto_processed == False,  # noqa: E712 — SQL comparison
+                or_(Download.auto_next_try.is_(None), Download.auto_next_try <= now),
+            ).order_by(Download.id).all()]
         finally:
             db.close()
 
         for dl_id, _title in completed:
             await notify.send_download_event("download_completed", dl_id)
-        for dl_id, _title, message in failed:
+        for dl_id, _title, message, nzbget_status in failed:
+            if nzbget_status in RETRY_WITH_ANOTHER_NZB:
+                retried = await asyncio.to_thread(try_another_nzb, dl_id, message)
+                if retried:
+                    await notify.send_download_event("download_retrying", dl_id, message=retried)
+                    continue
             await notify.send_download_event("download_failed", dl_id, message=message)
         for dl_id in to_match:
             await self.auto_process(dl_id)
@@ -298,10 +320,11 @@ class Pipeline:
                     dl.status = "failed"
                     dl.error_message = "No longer in NZBGet's queue or history (deleted or history cleared)"
                     log_to_db("ERROR", "poller", f"#{dl.id}: {dl.error_message}", download_id=dl.id)
-                    failed.append((dl.id, dl.display_title, dl.error_message))
+                    failed.append((dl.id, dl.display_title, dl.error_message, ""))
                 continue
 
-            outcome, message = classify_history_status(h_item.get("Status", ""))
+            nzbget_status = (h_item.get("Status") or "").upper()
+            outcome, message = classify_history_status(nzbget_status)
             if outcome == "downloaded":
                 dl.status = "downloaded"
                 dl.download_progress = 100
@@ -315,7 +338,65 @@ class Pipeline:
                 dl.status = "failed"
                 dl.error_message = message
                 log_to_db("ERROR", "poller", f"#{dl.id} failed in NZBGet: {message}", download_id=dl.id)
-                failed.append((dl.id, dl.display_title, message))
+                failed.append((dl.id, dl.display_title, message, nzbget_status))
+
+    async def _poll_torrents(self, db, completed, failed):
+        """Follow downloads sent to qBittorrent (from Prowlarr torrent results)."""
+        pending = db.query(Download).filter(Download.status == "sent", Download.client == "qbittorrent").all()
+        if not pending or not get_setting(db, "qbit_url"):
+            return
+        client = releases.qbit_client(db)
+        try:
+            known = await asyncio.to_thread(
+                lambda: {t.get("hash"): t for t in client.torrents(tag="")
+                         if any(tag.strip().startswith("bookclub-") for tag in (t.get("tags") or "").split(","))})
+        except Exception as exc:
+            message = f"Cannot reach qBittorrent: {exc}"
+            if message != self.qbit_error:
+                log_to_db("WARNING", "poller", message)
+            self.qbit_error = message
+            return
+        if self.qbit_error:
+            log_to_db("INFO", "poller", "qBittorrent reachable again")
+        self.qbit_error = ""
+        by_tag = {}
+        for info in known.values():
+            for tag in (info.get("tags") or "").split(","):
+                by_tag[tag.strip()] = info
+        prefix_from, prefix_to = get_setting(db, "qbit_path_prefix"), get_setting(db, "qbit_local_prefix")
+        for dl in pending:
+            info = known.get(dl.torrent_hash) if dl.torrent_hash else by_tag.get(qbittorrent.tag_for(dl.id))
+            if not info:
+                dl.missing_polls = (dl.missing_polls or 0) + 1
+                if dl.missing_polls >= MISSING_POLLS_BEFORE_FAILURE:
+                    dl.status = "failed"
+                    dl.error_message = "No longer in qBittorrent (removed there?)"
+                    log_to_db("ERROR", "poller", f"#{dl.id}: {dl.error_message}", download_id=dl.id)
+                    failed.append((dl.id, dl.display_title, dl.error_message, ""))
+                continue
+            dl.missing_polls = 0
+            dl.torrent_hash = info.get("hash") or dl.torrent_hash
+            outcome, progress = qbittorrent.torrent_state(info)
+            if outcome == "downloading":
+                dl.download_progress = progress
+                continue
+            if outcome == "failed":
+                dl.status = "failed"
+                dl.error_message = f"qBittorrent reports an error ({info.get('state')})"
+                log_to_db("ERROR", "poller", f"#{dl.id}: {dl.error_message}", download_id=dl.id)
+                failed.append((dl.id, dl.display_title, dl.error_message, ""))
+                continue
+            content = info.get("content_path") or ""
+            if content and not os.path.isdir(library.map_path(content, prefix_from, prefix_to)):
+                folder = os.path.dirname(content)
+                # A single file saved straight into the shared downloads folder: don't use that folder.
+                content = folder if folder.rstrip("/\\") != (info.get("save_path") or "").rstrip("/\\") else content
+            dl.status = "downloaded"
+            dl.download_progress = 100
+            dl.download_path = library.map_path(content, prefix_from, prefix_to)
+            log_to_db("INFO", "poller", f"#{dl.id} downloaded (qBittorrent) to {dl.download_path}", download_id=dl.id)
+            completed.append((dl.id, dl.display_title))
+        db.commit()
 
     async def _maybe_prune_logs(self):
         now = datetime.utcnow()
@@ -346,10 +427,9 @@ class Pipeline:
             dl = db.query(Download).filter(Download.id == download_id).first()
             if not dl or dl.status != "downloaded":
                 return
-            meta = dl.parsed_metadata
-            if meta.get("auto_processed"):
+            if dl.auto_processed:
                 return
-            await self._auto_match(db, dl, meta)
+            await self._auto_match(db, dl, dl.parsed_metadata)
         finally:
             db.close()
 
@@ -360,8 +440,7 @@ class Pipeline:
         automatic match was still searching — their choice wins, so stop here.
         """
         db.refresh(dl)
-        meta = dl.parsed_metadata
-        return dl.status != "downloaded" or dl.m4b_status is not None or bool(meta.get("auto_processed"))
+        return dl.status != "downloaded" or dl.m4b_status is not None or bool(dl.auto_processed)
 
     async def _needs_review(self, db, dl: Download, meta: dict, reason: str, retry: bool = False,
                             max_retries: int = len(AUTO_RETRY_MINUTES)):
@@ -372,19 +451,19 @@ class Pipeline:
         if self._taken_over(db, dl):
             log_to_db("INFO", "auto", f"#{dl.id}: handled by hand meanwhile — automatic match dropped", download_id=dl.id)
             return
-        attempts = int(meta.get("auto_attempts") or 0)
+        attempts = dl.auto_attempts or 0
         if retry and attempts < min(max_retries, len(AUTO_RETRY_MINUTES)):
             wait = AUTO_RETRY_MINUTES[attempts]
-            meta["auto_attempts"] = attempts + 1
-            meta["auto_next_try"] = (datetime.utcnow() + timedelta(minutes=wait)).isoformat()
-            meta["review_reason"] = f"{reason} — trying again in {wait} min"
+            dl.auto_attempts = attempts + 1
+            dl.auto_next_try = datetime.utcnow() + timedelta(minutes=wait)
+            dl.review_reason = f"{reason} — trying again in {wait} min"
             dl.set_metadata(meta)
             db.commit()
             log_to_db("WARNING", "auto", f"#{dl.id}: {reason} — will retry in {wait} min", download_id=dl.id)
             return
-        meta["auto_processed"] = True
-        meta["review_reason"] = reason
-        meta.pop("auto_next_try", None)
+        dl.auto_processed = True
+        dl.review_reason = reason
+        dl.auto_next_try = None
         dl.set_metadata(meta)
         db.commit()
         log_to_db("INFO", "auto", f"#{dl.id}: needs review — {reason}", download_id=dl.id)
@@ -491,9 +570,9 @@ class Pipeline:
         if self._taken_over(db, dl):
             log_to_db("INFO", "auto", f"#{dl.id}: handled by hand meanwhile — automatic match dropped", download_id=dl.id)
             return
-        meta["auto_processed"] = True
-        meta.pop("review_reason", None)
-        meta.pop("auto_next_try", None)
+        dl.auto_processed = True
+        dl.review_reason = None
+        dl.auto_next_try = None
         meta["input_path"] = dl.download_path
         dl.set_metadata(meta)
         enqueue(dl)
@@ -570,10 +649,28 @@ class Pipeline:
                 await asyncio.sleep(5)
 
     def _next_queued(self) -> int | None:
+        """
+        The next book to convert. With encoding hours or a temperature limit set,
+        a book that has to be encoded waits; one that is only copied or joined
+        (seconds of work) goes ahead of it.
+        """
         db = SessionLocal()
         try:
             positions = queue_positions(db)
-            return min(positions, key=positions.get) if positions else None
+            if not positions:
+                self.encode_wait = ""
+                return None
+            order = sorted(positions, key=positions.get)
+            settings = {key: get_setting(db, key) for key in ENCODE_SETTING_KEYS}
+            gate = audio.encode_gate(settings) if audio.restrictions_set(settings) else ""
+            self.encode_wait = gate
+            if not gate:
+                return order[0]
+            for dl_id in order:
+                dl = db.get(Download, dl_id)
+                if dl is not None and not needs_encoding(db, dl):
+                    return dl_id
+            return None
         finally:
             db.close()
 
@@ -664,9 +761,13 @@ class Pipeline:
             if max_cores and encoding["jobs"].isdigit():
                 # Parallel jobs beyond the allowed cores only fight over them.
                 encoding["jobs"] = str(min(int(encoding["jobs"]), max_cores))
-            delete_source = get_bool(db, "delete_source")
+            delete_source = get_bool(db, "delete_source") and not dl.is_torrent  # torrents keep seeding
             roots = download_roots(db)
+            encode_settings = {key: get_setting(db, key) for key in ENCODE_SETTING_KEYS}
+            chapter_lookup = get_bool(db, "audnexus_chapters")
+            provider = get_setting(db, "audible_provider")
             created_at = dl.created_at
+            dl_is_torrent = dl.is_torrent
             self.cancelled.discard(dl_id)
             self.current_id = dl_id  # before the commit, so Stop works from the first moment
             dl.m4b_status = "converting"
@@ -708,6 +809,7 @@ class Pipeline:
             if await self._stop_if_cancelled(dl_id):
                 return
             started = time.monotonic()
+            temperature_limit = audio.temperature_limit(encode_settings.get("encode_max_temp", ""))
             if len(audio_files) == 1 and audio_files[0].lower().endswith((".m4b", ".m4a", ".mp4")):
                 # Already a single AAC file — copy it (the source stays intact until the end) and tag it.
                 mode = "copied and tagged"
@@ -729,7 +831,14 @@ class Pipeline:
                              f"{f', {max_cores} core(s)' if max_cores else ''}"),
                           download_id=dl_id)
                 cmd = merge_command(input_path, work_file, meta, cover, no_conversion=join_only, **encoding)
-                returncode, log = await self._run(dl_id, audio.gentle(cmd, max_cores))
+                watcher = (asyncio.create_task(self._watch_temperature(temperature_limit))
+                           if temperature_limit and not join_only else None)
+                try:
+                    returncode, log = await self._run(dl_id, audio.gentle(cmd, max_cores))
+                finally:
+                    if watcher:
+                        watcher.cancel()
+                        await asyncio.gather(watcher, return_exceptions=True)
             elapsed = time.monotonic() - started
             log_to_db("DEBUG", "conversion", f"#{dl_id} tool output:\n{log[-20000:]}", download_id=dl_id)
 
@@ -746,6 +855,10 @@ class Pipeline:
                 await self._fail(dl_id, "m4b_failed", f"Conversion failed: {reason}{summary} — see the log",
                                  log=f"{log}\n\n--- BookClub diagnosis ---\n{diagnosis}")
                 return
+
+            if chapter_lookup and meta.get("asin"):
+                outcome = await asyncio.to_thread(chapters.apply, work_file, meta["asin"], provider, work_dir)
+                log_to_db("INFO", "conversion", f"#{dl_id}: chapters — {outcome}", download_id=dl_id)
 
             # Move into the library. Never overwrite an existing book.
             book_dir = os.path.dirname(final_path)
@@ -774,7 +887,10 @@ class Pipeline:
             except Exception as exc:
                 log_to_db("WARNING", "conversion", f"#{dl_id}: could not write metadata.json/cover: {exc}", download_id=dl_id)
 
-            if delete_source and not is_download_folder(input_path, nzbget_folder):
+            if dl_is_torrent:
+                log_to_db("INFO", "conversion", f"#{dl_id}: torrent download left in place for qBittorrent to seed",
+                          download_id=dl_id)
+            elif delete_source and not is_download_folder(input_path, nzbget_folder):
                 log_to_db("INFO", "conversion",
                           f"#{dl_id}: source {input_path} is not the folder NZBGet created for this download — left in place",
                           download_id=dl_id)
@@ -815,6 +931,7 @@ class Pipeline:
         finally:
             self.current_id = None
             self.current_proc = None
+            self.encode_note = ""
             self.cancelled.discard(dl_id)
             if not keep_work_dir:
                 await asyncio.to_thread(shutil.rmtree, work_dir, True)
@@ -865,6 +982,45 @@ class Pipeline:
             lines.append(buf)
         await proc.wait()
         return proc.returncode, "\n".join(lines)
+
+    async def _watch_temperature(self, limit: float):
+        """
+        While an encode runs: pause it (SIGSTOP to m4b-tool and its ffmpeg children)
+        when the CPU reaches `limit`, and resume when it has cooled down a little.
+        """
+        if not hasattr(signal, "SIGSTOP"):
+            return
+        paused_proc = None
+        resume_below = limit - audio.COOL_DOWN_DEGREES
+        try:
+            while True:
+                await asyncio.sleep(TEMPERATURE_CHECK_SECONDS)
+                proc = self.current_proc
+                if proc is None or proc.returncode is not None:
+                    continue
+                temperature = await asyncio.to_thread(audio.cpu_temperature)
+                if temperature is None:
+                    continue
+                if paused_proc is None and temperature >= limit:
+                    os.killpg(proc.pid, signal.SIGSTOP)
+                    paused_proc = proc
+                    self.encode_note = f"Paused — CPU {temperature:.0f}°C, resumes below {resume_below:.0f}°C"
+                    log_to_db("INFO", "conversion", f"#{self.current_id}: {self.encode_note}", download_id=self.current_id)
+                elif paused_proc is not None and temperature <= resume_below:
+                    os.killpg(paused_proc.pid, signal.SIGCONT)
+                    paused_proc = None
+                    self.encode_note = ""
+                    log_to_db("INFO", "conversion", f"#{self.current_id}: CPU {temperature:.0f}°C — encoding resumed",
+                              download_id=self.current_id)
+        except ProcessLookupError:
+            pass
+        finally:
+            if paused_proc is not None and paused_proc.returncode is None:
+                try:
+                    os.killpg(paused_proc.pid, signal.SIGCONT)  # never leave it frozen
+                except ProcessLookupError:
+                    pass
+            self.encode_note = ""
 
     def _set_progress(self, dl_id: int, pct: int):
         db = SessionLocal()
@@ -965,6 +1121,38 @@ class Pipeline:
             log_to_db("WARNING", "abs", f"#{dl_id}: Quick Match failed: {exc}", download_id=dl_id)
         item_url = client.item_web_url(item["id"])
         await notify.send_download_event("book_imported", dl_id, url=item_url, abs_url=item_url)
+
+    # ── wishlist: watch the forum for wanted books ───────────────────────────
+    async def _wishlist_loop(self):
+        from app.services import wishlist
+
+        await asyncio.sleep(60)  # let the server finish starting
+        while True:
+            try:
+                request_ids, notices = await asyncio.to_thread(wishlist.check_due)
+                for request_id in request_ids:
+                    self.spawn(self.process_request(request_id))
+                for event, fields in notices:
+                    await notify.send_event(event, **fields)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Wishlist check failed: %s", exc)
+            await asyncio.sleep(WISHLIST_LOOP_SECONDS)
+
+    async def check_wishlist_item(self, item_id: int):
+        """Check one wishlist entry now (a new entry, or "Check now")."""
+        from app.services import wishlist
+
+        try:
+            request_ids, notices = await asyncio.to_thread(wishlist.check_now, item_id)
+        except Exception as exc:
+            logger.exception("Wishlist #%s check failed: %s", item_id, exc)
+            return
+        for request_id in request_ids:
+            self.spawn(self.process_request(request_id))
+        for event, fields in notices:
+            await notify.send_event(event, **fields)
 
     # ── Home Assistant / voice requests ──────────────────────────────────────
     async def process_request(self, request_id: int):
@@ -1070,23 +1258,118 @@ def is_download_folder(input_path: str, nzbget_folder: str) -> bool:
     return same or library.is_within(input_path, nzbget_folder)
 
 
-AUTO_STATE_KEYS = ("auto_processed", "auto_attempts", "auto_next_try", "review_reason", "match_method",
-                   "ai_review", "filed")
+AUTO_META_KEYS = ("match_method", "ai_review", "filed", "edited_by_hand", "encode_check")
 
 
-def reset_auto_state(meta: dict) -> dict:
+def reset_auto_state(dl: Download) -> None:
     """Forget everything the automatic match did, e.g. for a fresh download of the same book."""
-    for key in AUTO_STATE_KEYS:
+    dl.auto_processed = False
+    dl.auto_attempts = 0
+    dl.auto_next_try = None
+    dl.review_reason = None
+    meta = dl.parsed_metadata
+    for key in AUTO_META_KEYS:
         meta.pop(key, None)
-    return meta
+    dl.set_metadata(meta)
 
 
-def mark_handled_by_hand(meta: dict) -> dict:
+def mark_handled_by_hand(dl: Download) -> None:
     """A person took over: no automatic match (running or scheduled) may overwrite their choice."""
-    meta["auto_processed"] = True
-    meta.pop("auto_next_try", None)
-    meta.pop("review_reason", None)
-    return meta
+    dl.auto_processed = True
+    dl.auto_next_try = None
+    dl.review_reason = None
+
+
+def reset_for_new_download(dl: Download, job_id: int) -> None:
+    """The row follows a new NZBGet job from the start."""
+    dl.nzbget_id = job_id
+    dl.status = "sent"
+    dl.error_message = None
+    dl.missing_polls = 0
+    dl.download_progress = None
+    dl.download_path = None
+    dl.m4b_status = None
+    dl.m4b_progress = None
+    dl.abs_status = None
+    dl.abs_item_id = None
+
+
+def try_another_nzb(dl_id: int, failure: str) -> str:
+    """
+    NZBGet failed a download in a way another upload may not (missing articles,
+    damaged, unpack failure): send the next-best NZB for the same forum post.
+    Returns a message when it did, "" when it didn't (off, used up, none left).
+    """
+    db = SessionLocal()
+    try:
+        dl = db.get(Download, dl_id)
+        if not dl or dl.status != "failed" or not dl.search_term or dl.nzb_source not in (None, "nzbking", "binsearch"):
+            return ""
+        limit = get_int(db, "nzb_auto_retry", 2)
+        meta = dl.parsed_metadata
+        retries = int(meta.get("nzb_retries") or 0)
+        if limit <= 0 or retries >= limit:
+            return ""
+        tried = [h for h in meta.get("tried_nzbs") or [] if h]
+        if dl.nzb_hash and dl.nzb_hash not in tried:
+            tried.append(dl.nzb_hash)
+        results, _notes = find_nzbs(dl.search_term, every_source=True)
+        content, chosen = None, None
+        for candidate in [r for r in results if r.get("nzb_hash") not in tried][:3]:
+            try:
+                content = fetch_nzb(candidate.get("source") or "nzbking", candidate["nzb_hash"], candidate.get("title", ""))
+                chosen = candidate
+                break
+            except Exception as exc:
+                tried.append(candidate["nzb_hash"])
+                log_to_db("INFO", "download", f"#{dl_id}: NZB {candidate['nzb_hash']} unusable — {exc}", download_id=dl_id)
+        if chosen is None:
+            meta["tried_nzbs"] = tried
+            dl.set_metadata(meta)
+            db.commit()
+            log_to_db("INFO", "download", f"#{dl_id}: no other NZB to try for '{dl.search_term}'", download_id=dl_id)
+            return ""
+        job_id = submit_to_nzbget(db, content, dl.nzb_name or f"bookclub-{dl.id}", dl.password or "", force=True)
+        tried.append(chosen["nzb_hash"])
+        reset_auto_state(dl)
+        meta = dl.parsed_metadata
+        meta["tried_nzbs"] = tried
+        meta["nzb_retries"] = retries + 1
+        dl.set_metadata(meta)
+        dl.nzb_hash, dl.nzb_source, dl.nzb_title = chosen["nzb_hash"], chosen.get("source") or "nzbking", chosen.get("title", "")
+        reset_for_new_download(dl, job_id)
+        db.commit()
+        message = f"'{failure}' — trying another NZB ({retries + 1} of {limit}, NZBGet job {job_id})"
+        log_to_db("WARNING", "download", f"#{dl_id}: {message}", download_id=dl_id)
+        return message
+    except (NzbError, Exception) as exc:  # noqa: B014 — never let this stop the poller
+        log_to_db("WARNING", "download", f"#{dl_id}: could not try another NZB: {exc}", download_id=dl_id)
+        return ""
+    finally:
+        db.close()
+
+
+def needs_encoding(db, dl: Download) -> bool:
+    """
+    True when converting this book means encoding (MP3 etc.), False when it is
+    only copied or joined. Remembered per input folder (it takes an ffprobe per file).
+    """
+    meta = dl.parsed_metadata
+    input_path = meta.get("input_path") or dl.download_path or ""
+    cached = meta.get("encode_check") or {}
+    if cached.get("path") == input_path and "needs" in cached:
+        return bool(cached["needs"])
+    files = library.find_audio_files(input_path) if input_path and os.path.isdir(input_path) else []
+    if len(files) == 1 and files[0].lower().endswith((".m4b", ".m4a", ".mp4")):
+        needs = False
+    elif files:
+        needs = not audio.can_join_without_encoding(files, audio.probe_all(files))
+    else:
+        needs = False  # nothing to encode: let it run and report the problem straight away
+    meta["encode_check"] = {"path": input_path, "needs": needs}
+    dl.set_metadata(meta)
+    db.commit()
+    return needs
 
 
 def enqueue(dl: Download):

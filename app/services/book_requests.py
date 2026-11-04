@@ -16,9 +16,9 @@ from datetime import datetime
 from app.database import SessionLocal
 from app.log_handler import log_to_db
 from app.models import BookRequest, Download
-from app.services import ai, forum_cache, library
+from app.services import ai, forum_cache, library, prowlarr, releases
 from app.services.matching import author_similarity, normalize, parse_nzb_name, title_similarity
-from app.services.nzb import fetch_nzb, search_nzbs, submit_to_nzbget
+from app.services.nzb import fetch_nzb, find_nzbs, submit_to_nzbget
 from app.settings_store import get_setting
 
 logger = logging.getLogger(__name__)
@@ -112,13 +112,13 @@ def _event(req: BookRequest, event: str, **fields) -> tuple[str, dict]:
                    "requested_by": req.requested_by or "", "message": req.message or "", **fields}
 
 
-def _search_forum(db, scraper, query: str) -> list[dict]:
+def _search_forum(db, scraper, query: str, refresh: bool = False) -> list[dict]:
     """Forum search matches all words, so try the title alone before the whole request."""
     title, author = split_query(query)
     attempts = [title, f"{title} {author}".strip(), query]
     seen, results = set(), []
     for term in dict.fromkeys(a for a in attempts if a):
-        found, _cached_at = forum_cache.search(db, scraper, term)
+        found, _cached_at = forum_cache.search(db, scraper, term, refresh=refresh)
         for topic in found:
             if topic["topic_id"] not in seen:
                 seen.add(topic["topic_id"])
@@ -170,15 +170,35 @@ def _reveal(db, scraper, topic_id: str) -> tuple[dict, dict, str]:
 
 
 def _find_nzb(term: str) -> dict | None:
-    for source in ("nzbking", "binsearch"):
-        try:
-            results = search_nzbs(source, term)
-        except Exception as exc:
-            logger.warning("%s search for '%s' failed: %s", source, term, exc)
-            continue
-        if results:
-            return results[0]
-    return None
+    """The best NZB for a forum search term (see nzb.rank_nzbs)."""
+    results, _notes = find_nzbs(term)
+    return results[0] if results else None
+
+
+def _try_indexers(db, req: BookRequest, why: str) -> tuple[str, dict] | None:
+    """
+    The forum couldn't supply the book: look on your Prowlarr indexers and take a
+    result that clearly is the book. None when Prowlarr isn't set up or isn't sure.
+    """
+    if not prowlarr.configured(db) or get_setting(db, "prowlarr_requests") == "0":
+        return None
+    try:
+        ranked = releases.search(db, req.query)
+    except Exception as exc:
+        log_to_db("WARNING", "request", f"Request #{req.id}: Prowlarr search failed — {exc}")
+        return None
+    pick = releases.confident_pick(db, ranked)
+    if not pick:
+        if ranked:
+            req.message = (f"{why}. Prowlarr found {len(ranked)} result(s), none clearly this book — "
+                           "see Search → Indexers")
+        return None
+    title, author = split_query(req.query)
+    dl = releases.send_release(db, pick, {"title": title, "author": author}, req.requested_by, req.id)
+    where = "qBittorrent" if dl.is_torrent else "NZBGet"
+    _set(db, req, "sent", f"Not on the forum — found on {pick['indexer'] or 'your indexers'}, sent to {where}",
+         download_id=dl.id)
+    return _event(req, "request_sent", title=title, author=author, download_id=dl.id)
 
 
 def send_post(db, revealed: dict, topic_id: str = "", msg_id: str = "", post_title: str = "",
@@ -239,7 +259,12 @@ def run_request(request_id: int) -> tuple[str, dict] | None:
             if not topic_id:
                 topics = _search_forum(db, scraper, req.query)
                 if not topics:
-                    _set(db, req, "not_found", f"Nothing on the forum matches '{req.query}'")
+                    why = f"Nothing on the forum matches '{req.query}'"
+                    req.message = ""
+                    sent = _try_indexers(db, req, why)
+                    if sent:
+                        return sent
+                    _set(db, req, "not_found", req.message or why)
                     return _event(req, "request_not_found")
                 topic_id, how = _choose_topic(db, req, topics)
                 if not topic_id:
@@ -274,7 +299,11 @@ def run_request(request_id: int) -> tuple[str, dict] | None:
                 dl = send_post(db, revealed, topic_id, msg_id, post_title, req.requested_by, req.id,
                                before_send=still_wanted, force=bool(req.force))
             except NoNzbFound as exc:
-                _set(db, req, "not_found", str(exc))
+                req.message = ""
+                sent = _try_indexers(db, req, str(exc))
+                if sent:
+                    return sent
+                _set(db, req, "not_found", req.message or str(exc))
                 return _event(req, "request_not_found", title=book_title, author=book_author)
             job_id = dl.nzbget_id
             _set(db, req, "sent", f"Downloading '{post_title}' (NZBGet job {job_id})", download_id=dl.id)

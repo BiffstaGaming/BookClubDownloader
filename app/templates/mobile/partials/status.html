@@ -51,7 +51,7 @@
 {% set meta = dl.parsed_metadata %}
 <div class="m-card d-flex gap-3 align-items-center">
   {% if meta.get('cover_url') %}
-  <img src="{{ meta.get('cover_url') }}" alt="" class="m-cover" loading="lazy" referrerpolicy="no-referrer" />
+  <img src="{{ cover_src(dl, meta) }}" alt="" class="m-cover" loading="lazy" referrerpolicy="no-referrer" />
   {% else %}
   <div class="m-cover"><i class="bi bi-book"></i></div>
   {% endif %}

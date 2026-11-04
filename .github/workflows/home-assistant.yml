@@ -1,0 +1,53 @@
+name: Home Assistant integration
+
+on:
+  push:
+    paths:
+      - 'custom_components/**'
+      - 'tests_ha/**'
+      - 'hacs.json'
+      - '.github/workflows/home-assistant.yml'
+  pull_request:
+    paths:
+      - 'custom_components/**'
+      - 'tests_ha/**'
+      - 'hacs.json'
+      - '.github/workflows/home-assistant.yml'
+  workflow_dispatch:
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Hassfest (Home Assistant's own integration checks)
+        uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+          ignore: brands description topics
+
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        # hassil checks that the voice sentences parse the way Assist will read them.
+        run: pip install pytest-homeassistant-custom-component hassil
+
+      - name: Integration tests
+        run: pytest tests_ha -q

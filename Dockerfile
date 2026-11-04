@@ -85,4 +85,5 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -fsS http://localhost:9933/api/health || exit 1
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9933"]
+# Open pages keep a live-update stream (/events) open; don't let those hold up a restart.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9933", "--timeout-graceful-shutdown", "5"]

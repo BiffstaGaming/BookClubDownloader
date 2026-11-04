@@ -5,7 +5,7 @@
 {% set meta = dl.parsed_metadata %}
 <tr data-dl-id="{{ dl.id }}">
   <td>
-    <div class="fw-semibold text-primary-light">{{ meta.get('title') or dl.post_title or dl.nzb_name or "—" }}</div>
+    <div class="fw-semibold text-primary-light">{{ parts.title(dl, meta) }}</div>
     {{ parts.details(dl, meta) }}
   </td>
   <td>
@@ -20,7 +20,7 @@
     {% if dl.nzbget_id %}<code class="bc-code">{{ dl.nzbget_id }}</code>{% else %}—{% endif %}
   </td>
   <td>
-    {{ parts.status(dl, meta, queue_positions, abs_url) }}
+    {{ parts.status(dl, meta, queue_positions, abs_url, encode_wait if dl.m4b_status == 'queued' else '', encode_note if dl.id == running_id else '') }}
   </td>
   <td>
     {{ confidence_badge(meta.get('match_confidence'), compact=True) }}

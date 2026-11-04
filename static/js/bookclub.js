@@ -141,6 +141,104 @@
     });
   });
 
+  // ── live updates ─────────────────────────────────────────────────────────
+  // The server says what changed (GET /events, Server-Sent Events) and only those
+  // parts of the page refresh, through these events on <body>:
+  //   bcDownloads  bcRequests  bcLogs  bcWishlist  bcSaved
+  // All BookClub tabs in this browser share one stream: the tab holding the lock
+  // keeps it open and passes messages on, so many tabs don't use up the browser's
+  // few connections to one server. Without a stream (old browser, a proxy that
+  // buffers), the pages fall back to polling: hx-trigger="every 10s [bcShouldPoll()]".
+  // While a tab is hidden nothing is refreshed; it catches up when you come back.
+  var TOPIC_EVENTS = { downloads: 'bcDownloads', requests: 'bcRequests', logs: 'bcLogs',
+                       wishlist: 'bcWishlist', saved: 'bcSaved' };
+  // At most one refresh per topic this often; the log list refreshes less, so it can be read.
+  var THROTTLE_MS = { logs: 10000 }, DEFAULT_THROTTLE_MS = 2000;
+  var liveUntil = 0, pending = new Set(), lastFired = {}, timers = {};
+
+  function fire(topic) {
+    var name = TOPIC_EVENTS[topic];
+    if (!name) return;
+    if (document.hidden) { pending.add(topic); return; }
+    var wait = (THROTTLE_MS[topic] || DEFAULT_THROTTLE_MS) - (Date.now() - (lastFired[topic] || 0));
+    if (wait <= 0) {
+      lastFired[topic] = Date.now();
+      htmx.trigger(document.body, name);
+    } else if (!timers[topic]) {
+      timers[topic] = setTimeout(function () { timers[topic] = null; fire(topic); }, wait);
+    }
+  }
+  function fireAll() { Object.keys(TOPIC_EVENTS).forEach(fire); }
+  function received(topics) { topics.forEach(function (t) { if (t) fire(t.trim()); }); }
+  function markLive() { liveUntil = Date.now() + 45000; }
+
+  window.bcLive = function () { return Date.now() < liveUntil; };
+  // Background polling only while visible and without a live stream.
+  window.bcShouldPoll = function () { return !document.hidden && !window.bcLive(); };
+
+  var streamOpen = function () { return false; };  // true in the tab holding the stream, while it's connected
+
+  function openStream(broadcast) {
+    var source, retry = 3000;
+    streamOpen = function () { return !!source && source.readyState === EventSource.OPEN; };
+    function connect() {
+      source = new EventSource('/events');
+      source.addEventListener('hello', function () {
+        markLive();
+        broadcast({ type: 'live' });
+        fireAll();  // anything missed while disconnected
+        retry = 3000;
+      });
+      source.addEventListener('change', function (e) {
+        markLive();
+        var topics = (e.data || '').split(',');
+        broadcast({ type: 'change', topics: topics });
+        received(topics);
+      });
+      source.onmessage = markLive;
+      source.onerror = function () {
+        liveUntil = 0;
+        broadcast({ type: 'down' });
+        if (source.readyState === EventSource.CLOSED) {  // the browser gave up: try again later
+          setTimeout(connect, retry);
+          retry = Math.min(retry * 2, 60000);
+        }
+      };
+    }
+    connect();
+    // Keep the other tabs' "live" flag fresh between changes (the server pings every 20 s).
+    setInterval(function () { if (source && source.readyState === EventSource.OPEN) { markLive(); broadcast({ type: 'live' }); } }, 15000);
+  }
+
+  if (window.EventSource) {
+    if (window.BroadcastChannel && navigator.locks && navigator.locks.request) {
+      var channel = new BroadcastChannel('bookclub-events');
+      channel.onmessage = function (e) {
+        var msg = e.data || {};
+        if (msg.type === 'change') { markLive(); received(msg.topics || []); }
+        else if (msg.type === 'live') markLive();
+        else if (msg.type === 'down') liveUntil = 0;
+        else if (msg.type === 'ping' && streamOpen()) channel.postMessage({ type: 'live' });  // a new tab asks
+      };
+      channel.postMessage({ type: 'ping' });
+      // Held until this tab closes; then another tab takes over the stream.
+      navigator.locks.request('bookclub-events', function () {
+        openStream(function (msg) { channel.postMessage(msg); });
+        return new Promise(function () {});
+      });
+    } else {
+      openStream(function () {});
+    }
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) return;
+    var topics = pending.size ? Array.from(pending) : [];
+    pending.clear();
+    // Back on the page: catch up on what changed (everything, if the stream wasn't up).
+    if (!window.bcLive()) fireAll(); else topics.forEach(fire);
+  });
+
   // Small persistence helpers used by the pages
   window.bcStore = {
     get: function (key, fallback) {

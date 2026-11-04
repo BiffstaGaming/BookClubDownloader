@@ -58,7 +58,7 @@ def test_shared_routes_answer_with_phone_fragments(client, db):
 def test_needs_me_filter(client, db):
     db.add_all([
         Download(status="failed", post_title="Failed One"),
-        Download(status="downloaded", post_title="Waiting One", download_metadata=json.dumps({"auto_processed": True})),
+        Download(status="downloaded", post_title="Waiting One", auto_processed=True),
         Download(status="sent", post_title="Busy One"),
         Download(status="downloaded", m4b_status="m4b_failed", post_title="Broken Conversion"),
     ])

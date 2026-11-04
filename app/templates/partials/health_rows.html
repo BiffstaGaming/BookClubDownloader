@@ -1,0 +1,81 @@
+{# Library health check results. While a check runs, this fragment refreshes itself. #}
+{% if notice %}<div class="mb-3">{{ notice | safe }}</div>{% endif %}
+{% if data.running %}
+<div hx-get="/library/health" hx-trigger="every 3s" hx-target="#health" hx-swap="innerHTML" data-bc-quiet
+     class="text-muted py-3"><span class="spinner-border spinner-border-sm text-accent me-2"></span>Reading every book in your library…</div>
+{% elif not abs_ready %}
+<div class="text-muted py-3">Connect Audiobookshelf in Settings first.</div>
+{% elif not data.scanned_at %}
+{% if data.error %}<div class="alert alert-danger">{{ data.error }}</div>{% endif %}
+<div class="text-muted py-3">Not checked yet — press <strong>Check the library</strong>.</div>
+{% else %}
+{% if data.error %}<div class="alert alert-danger">{{ data.error }} — showing the last check.</div>{% endif %}
+<div class="small text-muted mb-2">
+  Checked {{ data.total }} books on <time class="bc-time" datetime="{{ data.scanned_at }}">{{ data.scanned_at }}</time>
+  — {{ data.issues | length }} thing{{ '' if data.issues | length == 1 else 's' }} to look at.
+</div>
+
+{% if data.suggestions %}
+<div class="bc-item mb-3" style="border-color:var(--accent);">
+  <div class="fw-semibold mb-2"><i class="bi bi-stars text-accent me-1"></i>Claude suggests — nothing changes until you approve</div>
+  {% for s in data.suggestions %}
+  <div class="d-flex align-items-start gap-2 py-2" style="border-top:1px solid var(--border);">
+    <div class="flex-grow-1 min-w-0 small">
+      <div class="fw-semibold text-break">{{ s.title }}</div>
+      <div>Set <strong>{{ s.field }}</strong>{% if s.in_series %} in “{{ s.in_series }}”{% endif %} to <code class="bc-code">{{ s.value }}</code></div>
+      {% if s.reason %}<div class="text-muted">{{ s.reason }}</div>{% endif %}
+    </div>
+    <button class="btn bc-btn-sm-primary text-nowrap" hx-post="/library/health/apply" hx-vals='{{ {"suggestion_id": s.id} | tojson }}'
+            hx-target="#health" hx-swap="innerHTML"><i class="bi bi-check2 me-1"></i>Approve</button>
+    <button class="btn bc-btn-outline btn-sm" hx-post="/library/health/dismiss" hx-vals='{{ {"suggestion_id": s.id} | tojson }}'
+            hx-target="#health" hx-swap="innerHTML" title="Dismiss" aria-label="Dismiss"><i class="bi bi-x-lg"></i></button>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if data.issues %}
+<div class="bc-tabs">
+  <button type="button" class="bc-chip active" data-kind="" onclick="bcHealthFilter(this)">All ({{ data.issues | length }})</button>
+  {% for kind, label in labels.items() if counts.get(kind) %}
+  <button type="button" class="bc-chip" data-kind="{{ kind }}" onclick="bcHealthFilter(this)">{{ label }} ({{ counts[kind] }})</button>
+  {% endfor %}
+</div>
+{% set claude_can_help = counts.get('series_no_number') or counts.get('series_duplicate_number') or counts.get('no_author') %}
+{% if claude_can_help %}
+<div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
+  <button class="btn bc-btn-outline btn-sm" hx-post="/library/health/suggest" hx-target="#health" hx-swap="innerHTML"
+          {% if ai_reason %}disabled title="{{ ai_reason }}"{% endif %}>
+    <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+    <i class="bi bi-stars me-1"></i>Ask Claude to suggest fixes</button>
+  <span class="small text-muted">{% if ai_reason %}Claude: {{ ai_reason }}{% else %}For series numbers and missing authors; you approve each one.{% endif %}</span>
+</div>
+{% endif %}
+<div id="health-issues">
+  {% for i in data.issues %}
+  <div class="bc-item" data-kind="{{ i.kind }}">
+    <div class="d-flex align-items-start gap-2 flex-wrap">
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-semibold text-break">{{ i.title }}</div>
+        <div class="small text-muted">{{ i.author or "no author" }}{% if i.series %} · {{ i.series }}{% endif %}</div>
+        <div class="small mt-1"><span class="badge bc-conf-mid">{{ i.label }}</span> <span class="text-muted">{{ i.detail }}</span></div>
+      </div>
+      <div class="d-flex gap-1">
+        {% if i.kind in ("no_cover", "no_asin") %}
+        <button class="btn bc-btn-sm-primary" hx-post="/library/health/match" hx-vals='{{ {"item_id": i.item_id} | tojson }}'
+                hx-target="#health" hx-swap="innerHTML" title="Fill empty details and the cover from Audible">
+          <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>Quick Match</button>
+        {% endif %}
+        {% if abs_url %}
+        <a class="btn bc-btn-outline btn-sm" href="{{ abs_url }}/item/{{ i.item_id }}" target="_blank" rel="noopener"
+           title="Open in Audiobookshelf"><i class="bi bi-box-arrow-up-right"></i></a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="text-center text-success py-4"><i class="bi bi-check-circle fs-3 d-block mb-2"></i>Nothing wrong found.</div>
+{% endif %}
+{% endif %}

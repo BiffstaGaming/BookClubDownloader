@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Download, RevealedPost
 from app.services import book_requests
-from app.services.nzb import search_nzbs
+from app.services.nzb import find_nzbs
 from app.settings_store import get_setting
 from app.templating import templates
 from app.ui import alert, alert_html, not_configured
@@ -101,12 +101,7 @@ def choose_nzb(request: Request, post_id: int, db: Session = Depends(get_db)):
         return alert("danger", "Saved post not found.")
     if not get_setting(db, "nzbget_url"):
         return not_configured("NZBGet")
-    results, notes = [], []
-    for source in ("nzbking", "binsearch"):
-        try:
-            results.extend(search_nzbs(source, post.search_term))
-        except Exception as exc:
-            notes.append(f"{source} search failed: {exc}")
+    results, notes = find_nzbs(post.search_term, every_source=True)
     return templates.TemplateResponse(
         "partials/nzb_results.html",
         {

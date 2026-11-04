@@ -58,7 +58,7 @@ def test_send_warns_about_duplicates_then_force_sends(client, db, settings, monk
 def test_replace_nzb_updates_existing_row(client, db, settings, monkeypatch):
     settings(nzbget_url="http://nzbget")
     dl = Download(status="failed", nzb_hash="old", error_message="damaged", password="pw",
-                  download_metadata=json.dumps({"title": "T", "auto_processed": True}))
+                  auto_processed=True, download_metadata=json.dumps({"title": "T"}))
     db.add(dl)
     db.commit()
     monkeypatch.setattr(dl_router, "fetch_nzb", lambda *a: b"<nzb><file/></nzb>")
@@ -70,7 +70,7 @@ def test_replace_nzb_updates_existing_row(client, db, settings, monkeypatch):
     db.expire_all()
     dl = db.get(Download, dl.id)
     assert (dl.status, dl.nzbget_id, dl.nzb_hash, dl.nzb_source, dl.error_message) == ("sent", 77, "new", "binsearch", None)
-    assert "auto_processed" not in dl.parsed_metadata
+    assert dl.auto_processed is False
     assert db.query(Download).count() == 1
     assert sends == [{"force": True}]  # a deliberate re-send skips NZBGet's duplicate check
 

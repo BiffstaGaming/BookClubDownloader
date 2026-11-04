@@ -2,11 +2,14 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+import asyncio
+
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.database import engine, migrate_db
+from app.database import engine, get_db, migrate_db
+from app.events import bus
 from app.templating import templates
 from app import models
 from app.routers import search, downloads, settings as settings_router
@@ -30,6 +33,12 @@ from app.services import forum_cache  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.routers import saved as saved_router  # noqa: E402
 from app.routers import mobile as mobile_router  # noqa: E402
+from app.routers import covers as covers_router  # noqa: E402
+from app.routers import library as library_router  # noqa: E402
+from app.routers import live as live_router  # noqa: E402
+from app.routers import wishlist as wishlist_router  # noqa: E402
+from app.services import prowlarr  # noqa: E402
+from app.log_handler import flush as flush_logs  # noqa: E402
 
 # Once: save the forum posts behind every download already in the history.
 _db = SessionLocal()
@@ -45,11 +54,14 @@ finally:
 async def lifespan(_app: FastAPI):
     # Tests set BOOKCLUB_DISABLE_PIPELINE=1 to drive the pipeline by hand.
     run_pipeline = os.environ.get("BOOKCLUB_DISABLE_PIPELINE") != "1"
+    bus.attach(asyncio.get_running_loop())
     if run_pipeline:
         await pipeline.start()
     yield
+    bus.close()
     if run_pipeline:
         await pipeline.stop()
+    await asyncio.to_thread(flush_logs, 5.0)
 
 
 app = FastAPI(title="BookClub Downloader", lifespan=lifespan)
@@ -89,9 +101,13 @@ app.include_router(settings_router.router, prefix="/settings", tags=["settings"]
 app.include_router(logs_router.router, prefix="/logs", tags=["logs"])
 app.include_router(saved_router.router, prefix="/saved", tags=["saved"])
 app.include_router(mobile_router.router, prefix="/m", tags=["phone"])
+app.include_router(wishlist_router.router, prefix="/wishlist", tags=["wishlist"])
+app.include_router(library_router.router, prefix="/library", tags=["library"])
+app.include_router(covers_router.router, prefix="/covers", tags=["covers"])
+app.include_router(live_router.router, tags=["live"])
 app.include_router(api_router.router, prefix="/api", tags=["api"])
 
 
 @app.get("/")
-async def root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+def root(request: Request, db=Depends(get_db)):
+    return templates.TemplateResponse("index.html", {"request": request, "prowlarr_on": prowlarr.configured(db)})

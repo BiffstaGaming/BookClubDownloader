@@ -166,6 +166,18 @@
               Optional NZBGet category to assign downloads to.
             </div>
           </div>
+          <div class="mb-3" style="max-width:420px;">
+            <label for="nzb_auto_retry" class="form-label bc-label">When a download fails, try another NZB</label>
+            <div class="input-group">
+              <input type="number" class="form-control bc-input" id="nzb_auto_retry" name="nzb_auto_retry"
+                     value="{{ settings.get('nzb_auto_retry') }}" min="0" max="10" />
+              <span class="input-group-text bc-input-addon">times</span>
+            </div>
+            <div class="form-text text-muted">
+              For missing articles, damage and unpack failures, BookClub sends the next-best upload of the same post by
+              itself. <code>0</code> = never. A wrong password is not retried.
+            </div>
+          </div>
 
           <!-- NZBGet connection test -->
           <div class="d-flex align-items-center gap-3 flex-wrap">
@@ -182,6 +194,82 @@
               <i class="bi bi-lightning-charge me-1"></i>Test NZBGet Connection
             </button>
             <div id="nzb-test-result" class="flex-grow-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Prowlarr & qBittorrent Section -->
+      <div class="bc-card mb-4" id="indexers">
+        <div class="bc-card-header d-flex align-items-center gap-2">
+          <i class="bi bi-hdd-network text-accent"></i>
+          <span>Other Indexers &amp; Torrents (optional)</span>
+        </div>
+        <div class="bc-card-body">
+          <p class="text-muted small mb-3">
+            For books that aren't on the forum: <strong>Prowlarr</strong> searches all your usenet and torrent indexers
+            at once (Search page, "Not on the forum?"). Usenet results go to NZBGet; torrent results go to
+            <strong>qBittorrent</strong>. Torrent folders are never deleted after conversion, so they keep seeding.
+          </p>
+          <div class="row g-3 mb-2">
+            <div class="col-sm-6">
+              <label for="prowlarr_url" class="form-label bc-label">Prowlarr URL</label>
+              <input type="url" class="form-control bc-input" id="prowlarr_url" name="prowlarr_url"
+                     value="{{ settings.get('prowlarr_url', '') }}" placeholder="http://prowlarr:9696" />
+            </div>
+            <div class="col-sm-6">
+              {{ secret_input("prowlarr_api_key", "Prowlarr API key", placeholder="Prowlarr: Settings, General, API Key") }}
+            </div>
+          </div>
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="prowlarr_requests" name="prowlarr_requests" value="1"
+                   {% if settings.get('prowlarr_requests') == '1' %}checked{% endif %} />
+            <label class="form-check-label" for="prowlarr_requests">Requests try Prowlarr when the forum doesn't have the book</label>
+            <div class="form-text text-muted">Only a result that clearly is the requested book is sent; otherwise the request says so.</div>
+          </div>
+          <div class="d-flex align-items-center gap-3 flex-wrap mb-4">
+            <button type="button" class="btn bc-btn-outline" hx-post="/settings/test-prowlarr" hx-target="#prowlarr-test-result"
+                    hx-include="[name='prowlarr_url'],[name='prowlarr_api_key']">
+              <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+              <i class="bi bi-lightning-charge me-1"></i>Test Prowlarr</button>
+            <div id="prowlarr-test-result" class="flex-grow-1"></div>
+          </div>
+
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              <label for="qbit_url" class="form-label bc-label">qBittorrent Web UI URL</label>
+              <input type="url" class="form-control bc-input" id="qbit_url" name="qbit_url"
+                     value="{{ settings.get('qbit_url', '') }}" placeholder="http://qbittorrent:8080" />
+            </div>
+            <div class="col-sm-6">
+              <label for="qbit_category" class="form-label bc-label">Category</label>
+              <input type="text" class="form-control bc-input" id="qbit_category" name="qbit_category"
+                     value="{{ settings.get('qbit_category', '') }}" placeholder="audiobooks" />
+            </div>
+            <div class="col-sm-6">
+              <label for="qbit_username" class="form-label bc-label">Username</label>
+              <input type="text" class="form-control bc-input" id="qbit_username" name="qbit_username"
+                     value="{{ settings.get('qbit_username', '') }}" autocomplete="off" />
+            </div>
+            <div class="col-sm-6">
+              {{ secret_input("qbit_password", "Password") }}
+            </div>
+            <div class="col-sm-6">
+              <label for="qbit_path_prefix" class="form-label bc-label">Download path in qBittorrent</label>
+              <input type="text" class="form-control bc-input" id="qbit_path_prefix" name="qbit_path_prefix"
+                     value="{{ settings.get('qbit_path_prefix', '') }}" placeholder="/downloads" />
+            </div>
+            <div class="col-sm-6">
+              <label for="qbit_local_prefix" class="form-label bc-label">Same path in BookClub</label>
+              <input type="text" class="form-control bc-input" id="qbit_local_prefix" name="qbit_local_prefix"
+                     value="{{ settings.get('qbit_local_prefix', '') }}" placeholder="/downloads" />
+            </div>
+          </div>
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <button type="button" class="btn bc-btn-outline" hx-post="/settings/test-qbit" hx-target="#qbit-test-result"
+                    hx-include="[name='qbit_url'],[name='qbit_username'],[name='qbit_password']">
+              <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+              <i class="bi bi-lightning-charge me-1"></i>Test qBittorrent</button>
+            <div id="qbit-test-result" class="flex-grow-1"></div>
           </div>
         </div>
       </div>
@@ -330,6 +418,39 @@
                   about one core busy, so jobs = cores you allow is the fastest; fewer is cooler. Capped at the core limit.
                 </div>
               </div>
+              <div class="col-sm-6">
+                <label class="form-label bc-label" for="encode_window_start">Only start encoding between</label>
+                <div class="input-group">
+                  <input type="time" class="form-control bc-input" id="encode_window_start" name="encode_window_start"
+                         value="{{ settings.get('encode_window_start', '') }}" />
+                  <span class="input-group-text bc-input-addon">and</span>
+                  <input type="time" class="form-control bc-input" id="encode_window_end" name="encode_window_end"
+                         value="{{ settings.get('encode_window_end', '') }}" aria-label="End time" />
+                </div>
+                <div class="form-text text-muted">
+                  E.g. 01:00 and 07:00 to encode overnight. Books that only need copying or joining (seconds of work) are
+                  never held back. Leave both empty for any time. A book already encoding finishes.
+                </div>
+              </div>
+              <div class="col-sm-6">
+                <label for="encode_max_temp" class="form-label bc-label">Pause encoding when the CPU reaches</label>
+                <div class="input-group">
+                  <input type="number" class="form-control bc-input" id="encode_max_temp" name="encode_max_temp"
+                         value="{{ settings.get('encode_max_temp', '') }}" min="40" max="110" placeholder="off" />
+                  <span class="input-group-text bc-input-addon">°C</span>
+                </div>
+                <div class="form-text text-muted">
+                  The encoder is paused (not stopped) and carries on once the CPU is {{ cool_down }}°C cooler.
+                  {% if cpu_temp is not none %}Right now: <strong>{{ cpu_temp }}°C</strong>.
+                  {% else %}<span class="text-warning">This container can't read a CPU temperature, so this has no effect.</span>{% endif %}
+                </div>
+              </div>
+              <div class="col-sm-6">
+                <label for="timezone" class="form-label bc-label">Your time zone</label>
+                <input type="text" class="form-control bc-input" id="timezone" name="timezone"
+                       value="{{ settings.get('timezone', '') }}" placeholder="e.g. Australia/Brisbane" />
+                <div class="form-text text-muted">For the encoding hours. Filled in from this browser if empty.</div>
+              </div>
             </div>
           </div>
 
@@ -463,6 +584,15 @@
             When a download finishes, the best Audible match at or above this confidence is converted without asking.
             Anything lower waits on the Downloads page for you to pick the right match. Editions in a language other
             than the book language are scored down so a translated edition with the same title is never picked.
+          </div>
+          <div class="form-check form-switch mt-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="audnexus_chapters" name="audnexus_chapters" value="1"
+                   {% if settings.get('audnexus_chapters') == '1' %}checked{% endif %} />
+            <label class="form-check-label" for="audnexus_chapters">Real chapter names from Audible</label>
+            <div class="form-text text-muted">
+              When a book's chapters are just "Chapter 1, 2, 3" or file names, BookClub writes Audible's chapter list
+              (from Audnexus), but only when the running time matches, so the chapters start in the right places.
+            </div>
           </div>
         </div>
       </div>
@@ -649,6 +779,22 @@
               </div>
               <div class="form-text text-muted"><code>0</code> keeps logs forever.</div>
             </div>
+            <div class="col-sm-6">
+              <label for="wishlist_check_hours" class="form-label bc-label">Check the wishlist on the forum every</label>
+              <div class="input-group">
+                <input type="number" class="form-control bc-input" id="wishlist_check_hours" name="wishlist_check_hours"
+                       value="{{ settings.get('wishlist_check_hours') }}" min="1" max="168" />
+                <span class="input-group-text bc-input-addon">hours</span>
+              </div>
+            </div>
+            <div class="col-sm-6">
+              <label for="wishlist_max_per_check" class="form-label bc-label">Request at most</label>
+              <div class="input-group">
+                <input type="number" class="form-control bc-input" id="wishlist_max_per_check" name="wishlist_max_per_check"
+                       value="{{ settings.get('wishlist_max_per_check') }}" min="1" max="20" />
+                <span class="input-group-text bc-input-addon">books per author/series each check</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -666,6 +812,14 @@
 
 {% block extra_js %}
 <script>
+// Encoding hours use your time zone: suggest this browser's when none is saved.
+(function () {
+  var tz = document.getElementById('timezone');
+  try {
+    if (tz && !tz.value) tz.value = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (e) {}
+})();
+
 // Copy the API token. navigator.clipboard only exists on https/localhost, so on a
 // plain-http LAN address fall back to selecting the field and copying that.
 function bcCopyToken(btn) {

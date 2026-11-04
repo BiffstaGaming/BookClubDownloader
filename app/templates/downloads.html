@@ -28,7 +28,7 @@
       </div>
       <div id="request-notice"></div>
       <div class="bc-card-body p-0" id="request-rows" data-bc-quiet
-           hx-get="/downloads/requests" hx-trigger="load, every 10s, refreshRequests from:body" hx-swap="innerHTML">
+           hx-get="/downloads/requests" hx-trigger="load, bcRequests from:body, refreshRequests from:body, every 10s [bcShouldPoll()]" hx-swap="innerHTML">
       </div>
     </div>
   </div>
@@ -78,7 +78,7 @@
               data-bc-quiet
               hx-post="/downloads/sync-status"
               hx-include="#dl-controls"
-              hx-trigger="every 10s, refreshDownloads from:body"
+              hx-trigger="bcDownloads from:body, refreshDownloads from:body, every 10s [bcShouldPoll()]"
               hx-swap="innerHTML"
             >
               {% include "partials/download_rows.html" %}
@@ -148,7 +148,9 @@ function setDlLimit(l) {
   var saved = bcStore.get('downloads', { filter: 'active', limit: '25' });
   // A notification link to a finished book: show everything so the row is there.
   applyDlControls(highlightId ? 'all' : saved.filter, highlightId ? '50' : String(saved.limit));
-  reloadRows();
+  // After htmx has set the page up (its ready handler runs first): a request started earlier
+  // leaves its element marked as loading for good.
+  document.addEventListener('DOMContentLoaded', reloadRows);
 })();
 
 document.body.addEventListener('htmx:afterSettle', function (evt) {

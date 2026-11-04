@@ -24,6 +24,19 @@
 <div id="forum-results"></div>
 <div id="post-detail" class="mt-2"></div>
 <div id="nzb-results" class="mt-2"></div>
+
+{% if prowlarr_on %}
+<div class="m-section">Not on the forum?</div>
+<form class="m-card" hx-post="/search/indexers" hx-target="#indexer-results" hx-swap="innerHTML">
+  <label for="indexer-query" class="fw-semibold mb-2 d-block"><i class="bi bi-hdd-network text-accent me-1"></i>Search your indexers (Prowlarr)</label>
+  <input type="search" id="indexer-query" name="query" class="form-control bc-input mb-2" required minlength="2"
+         placeholder="Title and author" autocomplete="off" enterkeyhint="search" />
+  <button type="submit" class="btn bc-btn-primary w-100">
+    <span class="spinner-border spinner-border-sm htmx-indicator me-2" role="status"></span>Search Prowlarr
+  </button>
+</form>
+<div id="indexer-results" class="mt-2"></div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -79,7 +92,8 @@ document.body.addEventListener('htmx:afterSwap', function (evt) {
   }
 });
 
-(function restore() {
+// Once htmx has set the page up (a request started earlier leaves its element marked as loading for good).
+document.addEventListener('DOMContentLoaded', function restore() {
   var linked = new URLSearchParams(location.search).get('q');
   if (linked) {
     mSave({ q: linked });
@@ -106,6 +120,13 @@ document.body.addEventListener('htmx:afterSwap', function (evt) {
       }
     })
     .finally(function () { restoring = false; });
-})();
+});
+// "Not on the forum?": start from what was searched there.
+document.body.addEventListener('htmx:configRequest', function (evt) {
+  var box = document.getElementById('indexer-query');
+  if (box && evt.detail.path === '/search/forum' && evt.detail.parameters.query && !box.value) {
+    box.value = evt.detail.parameters.query;
+  }
+});
 </script>
 {% endblock %}

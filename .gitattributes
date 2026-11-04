@@ -1,2 +1,5 @@
 * text=auto eol=lf
 *.bat text eol=crlf
+
+# Vendored libraries are checked against integrity hashes: never touch their line endings.
+static/vendor/** -text

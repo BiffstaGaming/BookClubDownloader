@@ -14,10 +14,10 @@ from app.models import BookRequest, Download, LogEntry
 from app.services import book_requests, forum_cache, library
 from app.services.abs import AbsClient
 from app.services.matching import parse_nzb_name, rank_candidates
-from app.services.nzb import NzbError, fetch_nzb, search_nzbs, submit_to_nzbget
+from app.services.nzb import NzbError, fetch_nzb, find_nzbs, submit_to_nzbget
 from app.services.pipeline import (
     apply_candidate, check_input_folder, enqueue, find_duplicates, mark_handled_by_hand, pipeline, queue_positions,
-    reset_auto_state,
+    reset_auto_state, reset_for_new_download,
 )
 from app.settings_store import AUDIBLE_PROVIDERS, get_setting
 from app.templating import templates
@@ -43,6 +43,8 @@ def _rows(request: Request, db: Session, downloads: list):
             "queue_positions": queue_positions(db),
             "abs_url": get_setting(db, "abs_url").rstrip("/"),
             "running_id": pipeline.current_id,
+            "encode_wait": pipeline.encode_wait,
+            "encode_note": pipeline.encode_note,
         },
     )
 
@@ -151,12 +153,13 @@ def send_to_nzbget(
         return alert("danger", f"Failed to send to NZBGet: {exc}")
 
     if replacing:
-        meta = reset_auto_state(replacing.parsed_metadata)
-        for key in ("match_confidence", "input_path"):
+        reset_auto_state(replacing)
+        meta = replacing.parsed_metadata
+        for key in ("match_confidence", "input_path", "nzb_retries"):
             meta.pop(key, None)
         replacing.set_metadata(meta)
         replacing.nzb_hash, replacing.nzb_source, replacing.nzb_title = nzb_hash, nzb_source, nzb_title
-        _reset_for_new_download(replacing, job_id)
+        reset_for_new_download(replacing, job_id)
         db.commit()
         forum_cache.mark_sent(db, replacing.search_term or search_term)
         log_to_db("INFO", "download", f"#{replacing.id}: re-sent with another NZB (job {job_id})", download_id=replacing.id)
@@ -186,38 +189,30 @@ def send_to_nzbget(
     )
 
 
-def _reset_for_new_download(dl: Download, job_id: int):
-    dl.nzbget_id = job_id
-    dl.status = "sent"
-    dl.error_message = None
-    dl.missing_polls = 0
-    dl.download_progress = None
-    dl.download_path = None
-    dl.m4b_status = None
-    dl.m4b_progress = None
-    dl.abs_status = None
-    dl.abs_item_id = None
-
-
 @router.post("/{download_id}/retry-download", response_class=HTMLResponse)
 def retry_download(request: Request, download_id: int, db: Session = Depends(get_db)):
     """Fetch the same NZB again and re-submit it (e.g. after fixing the password or disk space)."""
     dl = _get(db, download_id)
     if not dl:
         return HTMLResponse('<tr><td colspan="6">Not found.</td></tr>')
-    if not dl.nzb_hash:
-        dl.error_message = "No NZB recorded for this download — use 'Other NZB' instead"
+    if not dl.nzb_hash or dl.is_torrent:
+        dl.error_message = ("Torrents can't be re-sent from here — search again on the Search page" if dl.is_torrent
+                            else "No NZB recorded for this download — use 'Other NZB' instead")
         db.commit()
         return _rows(request, db, [dl])
     try:
-        content = fetch_nzb(dl.nzb_source or "nzbking", dl.nzb_hash, dl.nzb_title or dl.nzb_name or "")
+        content = fetch_nzb(dl.nzb_source or "nzbking", dl.nzb_hash, dl.nzb_title or dl.nzb_name or "",
+                            url=dl.parsed_metadata.get("download_url", ""))
         job_id = submit_to_nzbget(db, content, dl.nzb_name or f"bookclub-{dl.id}", dl.password or "", force=True)
     except Exception as exc:
         dl.error_message = f"Retry failed: {exc}"
         db.commit()
         return _rows(request, db, [dl])
-    dl.set_metadata(reset_auto_state(dl.parsed_metadata))
-    _reset_for_new_download(dl, job_id)
+    reset_auto_state(dl)
+    meta = dl.parsed_metadata
+    meta.pop("nzb_retries", None)  # a fresh start for the automatic "try another NZB"
+    dl.set_metadata(meta)
+    reset_for_new_download(dl, job_id)
     db.commit()
     log_to_db("INFO", "download", f"#{dl.id}: re-sent to NZBGet (job {job_id})", download_id=dl.id)
     return _rows(request, db, [dl])
@@ -232,13 +227,8 @@ def alternatives(request: Request, download_id: int, db: Session = Depends(get_d
     term = dl.search_term or ""
     if not term:
         return alert("warning", "No search term recorded for this download — search again from the Search page.")
-    results, notes = [], []
-    for source in ("nzbking", "binsearch"):
-        try:
-            found = search_nzbs(source, term)
-            results.extend(r for r in found if r.get("nzb_hash") != dl.nzb_hash)
-        except Exception as exc:
-            notes.append(f"{source} search failed: {exc}")
+    found, notes = find_nzbs(term, every_source=True)
+    results = [r for r in found if r.get("nzb_hash") != dl.nzb_hash]
     if not results:
         notes.append("Only the NZB that already failed was found." if dl.nzb_hash else "No NZBs found.")
     meta = dl.parsed_metadata
@@ -338,6 +328,8 @@ def downloads_page(request: Request, db: Session = Depends(get_db)):
             "queue_positions": queue_positions(db),
             "abs_url": get_setting(db, "abs_url").rstrip("/"),
             "running_id": pipeline.current_id,
+            "encode_wait": pipeline.encode_wait,
+            "encode_note": pipeline.encode_note,
         },
     )
 
@@ -357,7 +349,7 @@ def _apply_dl_filter(q, dl_filter: str):
     elif dl_filter == "attention":
         # Waiting for you: failures, and finished downloads the automatic match handed over.
         waiting = and_(Download.status == "downloaded", Download.m4b_status.is_(None),
-                       Download.download_metadata.like('%"auto_processed": true%'))
+                       Download.auto_processed == True)  # noqa: E712 — SQL comparison
         q = q.filter(or_(
             Download.status == "failed",
             Download.m4b_status.in_(("m4b_failed", "move_failed")),
@@ -456,7 +448,7 @@ def apply_match(request: Request, download_id: int, candidate: str = Form(...), 
                 "asin", "isbn", "language", "genres", "cover_url"):
         meta.pop(key, None)  # don't mix fields from a previous, different match
     apply_candidate(meta, chosen)
-    mark_handled_by_hand(meta)
+    mark_handled_by_hand(dl)
     meta["match_method"] = f"you ({meta.get('match_confidence')}% match)"
     dl.set_metadata(meta)
     db.commit()
@@ -473,7 +465,8 @@ def _save_form(dl: Download, form: dict) -> dict:
     for key in _FORM_FIELDS:
         meta[key] = (form.get(key) or "").strip()
     meta.pop("output_file", None)  # destination now comes from the library template
-    mark_handled_by_hand(meta)  # an automatic match still running must not overwrite this
+    meta["edited_by_hand"] = True  # the details are yours now, not the automatic match's best guess
+    mark_handled_by_hand(dl)  # an automatic match still running must not overwrite this
     dl.set_metadata(meta)
     return meta
 

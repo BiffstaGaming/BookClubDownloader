@@ -34,8 +34,11 @@
 {% if dl.error_message %}
 <div class="small mt-1 text-warning"><i class="bi bi-exclamation-circle me-1"></i>{{ dl.error_message }}</div>
 {% endif %}
-{% if dl.status == "downloaded" and dl.m4b_status is none and meta.get('review_reason') %}
-<div class="bc-reason mt-1 text-warning"><i class="bi bi-person-check me-1"></i>{{ meta.get('review_reason') }}</div>
+{% if dl.status == "downloaded" and dl.m4b_status is none and dl.review_reason %}
+<div class="bc-reason mt-1 text-warning"><i class="bi bi-person-check me-1"></i>{{ dl.review_reason }}</div>
+{% endif %}
+{% if dl.indexer or dl.is_torrent %}
+<div class="bc-reason mt-1 text-muted"><i class="bi bi-{{ 'magnet' if dl.is_torrent else 'hdd-network' }} me-1"></i>From {{ dl.indexer or 'Prowlarr' }}{% if dl.is_torrent %} via qBittorrent{% endif %}</div>
 {% endif %}
 {% if meta.get('match_method') %}
 <div class="bc-reason mt-1 text-muted"><i class="bi bi-{{ 'stars' if 'Claude' in meta.get('match_method') else 'check2' }} me-1"></i>Matched by {{ meta.get('match_method') }}</div>
@@ -48,7 +51,18 @@
 {% endif %}
 {% endmacro %}
 
-{% macro status(dl, meta, queue_positions, abs_url) %}
+{# The title shown for a download. While it waits for you, the automatic match's
+   pick is only a best guess — labelled so it isn't mistaken for a confirmed match. #}
+{% macro title(dl, meta) %}
+{{ meta.get('title') or dl.post_title or dl.nzb_name or "—" }}
+{% if is_best_guess(dl, meta) %}<span class="badge bc-conf-mid ms-1 align-middle" style="font-size:.65rem;" title="The closest Audible match — not confirmed. Check it before converting.">Best guess</span>{% endif %}
+{% endmacro %}
+
+{% macro is_best_guess(dl, meta) -%}
+{{- "1" if (dl.needs_review and meta.get('match_confidence') is not none and not meta.get('match_method') and not meta.get('edited_by_hand')) else "" -}}
+{%- endmacro %}
+
+{% macro status(dl, meta, queue_positions, abs_url, encode_wait="", encode_note="") %}
 {% if dl.status == "downloaded" %}
 <span class="badge bc-badge-success"><i class="bi bi-check-circle-fill me-1"></i>Downloaded</span>
 {% elif dl.status == "sent" %}
@@ -71,6 +85,9 @@
   <span class="badge bc-conf-mid">
     <i class="bi bi-hourglass-split me-1"></i>Queued{% if qpos %} #{{ qpos }}{% endif %}
   </span>
+  {% if encode_wait and (meta.get('encode_check') or {}).get('needs') %}
+  <div class="bc-reason mt-1 text-muted"><i class="bi bi-moon-stars me-1"></i>{{ encode_wait[:1]|upper }}{{ encode_wait[1:] }}</div>
+  {% endif %}
 </div>
 {% elif dl.m4b_status == "converting" %}
 <div class="mt-1">
@@ -81,6 +98,9 @@
   <div class="progress mt-1 bc-mini-progress">
     <div class="progress-bar" style="width:{{ dl.m4b_progress }}%;background:var(--accent);"></div>
   </div>
+  {% endif %}
+  {% if encode_note %}
+  <div class="bc-reason mt-1 text-warning"><i class="bi bi-thermometer-high me-1"></i>{{ encode_note }}</div>
   {% endif %}
 </div>
 {% elif dl.m4b_status == "converted" %}
@@ -95,7 +115,7 @@
 <div class="mt-1">
   <span class="badge bc-badge-danger"><i class="bi bi-folder-x me-1"></i>Move Failed</span>
 </div>
-{% elif dl.status == "downloaded" and meta.get('auto_processed') %}
+{% elif dl.needs_review %}
 <div class="mt-1">
   <span class="badge bc-conf-mid"><i class="bi bi-person-check me-1"></i>Needs review</span>
 </div>
@@ -119,14 +139,20 @@
 
 {% macro actions(dl, target, logs_link=True) %}
 {% if dl.status == "failed" %}
-  {% if dl.nzb_hash %}{{ row_button("/downloads/" ~ dl.id ~ "/retry-download", "arrow-repeat", "Retry", target, cls="bc-btn-sm-primary", title="Send the same NZB to NZBGet again") }}{% endif %}
+  {% if dl.nzb_hash and not dl.is_torrent %}{{ row_button("/downloads/" ~ dl.id ~ "/retry-download", "arrow-repeat", "Retry", target, cls="bc-btn-sm-primary", title="Send the same NZB to NZBGet again") }}{% endif %}
   {% if dl.search_term %}{{ panel_button("/downloads/" ~ dl.id ~ "/alternatives", "search", "Other NZB", cls="bc-btn-outline btn-sm", title="Search for a different NZB") }}{% endif %}
 {% elif dl.m4b_status == "queued" %}
   {{ row_button("/downloads/" ~ dl.id ~ "/reset-conversion", "x-circle", "Dequeue", target, confirm="Remove this conversion from the queue?", title="Remove from queue") }}
 {% elif dl.m4b_status == "converting" %}
   {{ row_button("/downloads/" ~ dl.id ~ "/reset-conversion", "stop-circle", "Stop", target, confirm="Stop this conversion?", title="Stop the running conversion") }}
 {% elif dl.status == "downloaded" and dl.m4b_status in (none, "m4b_failed", "move_failed") %}
-  {{ panel_button("/downloads/" ~ dl.id ~ "/convert", "arrow-repeat" if dl.m4b_status else "file-earmark-music", "Retry" if dl.m4b_status else "Convert") }}
+  {% if dl.m4b_status %}
+  {{ panel_button("/downloads/" ~ dl.id ~ "/convert", "arrow-repeat", "Retry") }}
+  {% elif dl.needs_review %}
+  {{ panel_button("/downloads/" ~ dl.id ~ "/convert", "person-check", "Review & convert", title="Check the match, then convert") }}
+  {% else %}
+  {{ panel_button("/downloads/" ~ dl.id ~ "/convert", "file-earmark-music", "Convert") }}
+  {% endif %}
   {% if dl.m4b_status %}{{ panel_button("/downloads/" ~ dl.id ~ "/conversion-log", "terminal", "Log", cls="bc-btn-outline btn-sm") }}{% endif %}
 {% elif dl.m4b_status == "converted" and dl.abs_status in ("not_found", "failed") %}
   {{ row_button("/downloads/" ~ dl.id ~ "/reimport", "collection-play", "Re-import", target, cls="bc-btn-sm-primary", title="Ask Audiobookshelf to pick it up again") }}

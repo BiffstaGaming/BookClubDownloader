@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
@@ -6,12 +8,12 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.scrapers.abook import get_scraper
-from app.services import forum_cache
-from app.services.nzb import search_nzbs
+from app.services import forum_cache, prowlarr, releases
+from app.services.nzb import rank_nzbs, search_nzbs
 from app.services.pipeline import find_duplicates
 from app.settings_store import get_setting
 from app.templating import templates
-from app.ui import alert, not_configured
+from app.ui import alert, alert_html, not_configured
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -198,7 +200,7 @@ def search_nzb(
     for source in sources:
         label = "Binsearch" if source == "binsearch" else "NZBKing"
         try:
-            results = search_nzbs(source, term)
+            results = rank_nzbs(search_nzbs(source, term))
         except Exception as exc:
             logger.error("%s search error for '%s': %s", label, term, exc)
             errors.append(f"{label} search failed: {exc}")
@@ -237,3 +239,67 @@ def search_nzb(
             "replace_id": replace_id,
         },
     )
+
+
+# ── other indexers (Prowlarr) ─────────────────────────────────────────────────
+
+# Results are kept here, not sent to the browser: their download links carry the Prowlarr API key.
+RELEASE_TTL_SECONDS = 3600
+_releases: dict[str, tuple[float, dict]] = {}
+_releases_lock = threading.Lock()
+
+
+def _remember(results: list[dict]) -> None:
+    now = time.monotonic()
+    with _releases_lock:
+        for key in [k for k, (at, _r) in _releases.items() if now - at > RELEASE_TTL_SECONDS]:
+            del _releases[key]
+        for r in results:
+            _releases[r["guid"]] = (now, r)
+
+
+@router.post("/indexers", response_class=HTMLResponse)
+def search_indexers(request: Request, query: str = Form(default=""), db: Session = Depends(get_db)):
+    query = query.strip()
+    if not prowlarr.configured(db):
+        return alert("info", "Connect Prowlarr in Settings to search your usenet and torrent indexers too.")
+    if len(query) < 2:
+        return alert("warning", "Type a title (and author).")
+    try:
+        results = releases.search(db, query)
+    except Exception as exc:
+        logger.warning("Prowlarr search for '%s' failed: %s", query, exc)
+        return alert("danger", f"Prowlarr search failed: {exc}")
+    results = [r for r in results if r["guid"]][:60]
+    _remember(results)
+    from app.services.book_requests import split_query
+    title, author = split_query(query)
+    return templates.TemplateResponse("partials/release_results.html", {
+        "request": request, "results": results, "query": query, "book_title": title, "book_author": author,
+        "blocked": {r["guid"]: releases.can_send(db, r) for r in results},
+    })
+
+
+@router.post("/release", response_class=HTMLResponse)
+def send_release(guid: str = Form(...), book_title: str = Form(default=""), book_author: str = Form(default=""),
+                 force: str = Form(default=""), db: Session = Depends(get_db)):
+    with _releases_lock:
+        entry = _releases.get(guid)
+    if not entry:
+        return alert("warning", "That result has expired — search again.")
+    release = entry[1]
+    if force != "1":
+        duplicates = find_duplicates(db, book_title or release["title"], book_author, nzb_hash=release["guid"][:500])
+        if duplicates:
+            reasons = "; ".join(duplicates)
+            send_anyway = ('<button type="button" class="btn btn-sm btn-outline-warning ms-2" hx-post="/search/release" '
+                           'hx-target="closest .bc-release-status" hx-vals=\'{"force": "1"}\' '
+                           'hx-include="closest form">Send anyway</button>')
+            return HTMLResponse(alert_html("warning", f"Not sent — you may already have it: {reasons}.", send_anyway))
+    try:
+        dl = releases.send_release(db, release, {"title": book_title, "author": book_author})
+    except Exception as exc:
+        logger.warning("Sending '%s' failed: %s", release["title"], exc)
+        return alert("danger", f"Not sent: {exc}")
+    where = "qBittorrent" if dl.is_torrent else "NZBGet"
+    return alert("success", f"Sent to {where} — ", '<a href="/downloads" class="alert-link">View Downloads</a>')

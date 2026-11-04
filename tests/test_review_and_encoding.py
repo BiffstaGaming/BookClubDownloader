@@ -26,25 +26,23 @@ def test_audible_outage_is_retried_not_sent_for_review(db, settings, tmp_path, c
     monkeypatch.setattr(FakeAbs, "search_books", down)
     dl_id = make_download(db, status="downloaded", download_path=str(src), post_title="Rob Jones - The Vatican Conspiracy")
     run(Pipeline().auto_process(dl_id))
-    meta = reload(db, dl_id).parsed_metadata
-    assert not meta.get("auto_processed") and meta["auto_attempts"] == 1 and meta["auto_next_try"]
-    assert "trying again" in meta["review_reason"]
+    dl = reload(db, dl_id)
+    assert not dl.auto_processed and dl.auto_attempts == 1 and dl.auto_next_try
+    assert "trying again" in dl.review_reason
     assert not any(e["event"] == "needs_review" for e in clean_db)
 
     # Not due yet: the poller leaves it alone.
     run(Pipeline().poll_once())
-    assert reload(db, dl_id).parsed_metadata["auto_attempts"] == 1
+    assert reload(db, dl_id).auto_attempts == 1
 
     # Out of retries: a person is asked.
     dl = reload(db, dl_id)
-    meta = dl.parsed_metadata
-    meta["auto_attempts"] = len(pl.AUTO_RETRY_MINUTES)
-    meta["auto_next_try"] = ""
-    dl.set_metadata(meta)
+    dl.auto_attempts = len(pl.AUTO_RETRY_MINUTES)
+    dl.auto_next_try = None
     db.commit()
     run(Pipeline().poll_once())
-    meta = reload(db, dl_id).parsed_metadata
-    assert meta["auto_processed"] is True and "Audible search failed" in meta["review_reason"]
+    dl = reload(db, dl_id)
+    assert dl.auto_processed is True and "Audible search failed" in dl.review_reason
     assert any(e["event"] == "needs_review" for e in clean_db)
 
 
@@ -105,7 +103,7 @@ def test_claude_cannot_override_the_language_check(db, settings, tmp_path, monke
                           post_title="Book Club - Sheila Masterson - The Poison Daughter (2026)")
     run(Pipeline().auto_process(dl_id))
     dl = reload(db, dl_id)
-    assert dl.m4b_status is None and "not in English" in dl.parsed_metadata["review_reason"]
+    assert dl.m4b_status is None and "not in English" in dl.review_reason
 
 
 def test_unsure_claude_leaves_it_for_review(db, settings, tmp_path, monkeypatch):
@@ -116,7 +114,7 @@ def test_unsure_claude_leaves_it_for_review(db, settings, tmp_path, monkeypatch)
     dl_id = make_download(db, status="downloaded", download_path=str(src), post_title="Rob Jones - The Vatican Conspiracy")
     run(Pipeline().auto_process(dl_id))
     dl = reload(db, dl_id)
-    assert dl.m4b_status is None and "none of these is the book" in dl.parsed_metadata["review_reason"]
+    assert dl.m4b_status is None and "none of these is the book" in dl.review_reason
 
 
 # ── encoding ──────────────────────────────────────────────────────────────────

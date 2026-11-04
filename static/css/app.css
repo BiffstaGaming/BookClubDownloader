@@ -628,3 +628,47 @@ tr.bc-highlight > td {
 
 /* Small progress bar under a status badge */
 .bc-mini-progress { height: 3px; max-width: 100px; }
+
+/* ── Lists of cards shared by the desktop and phone pages (wishlist, series, indexers, health) ── */
+.bc-item,
+.bc-release {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 0.9rem;
+}
+.bc-item + .bc-item { margin-top: 0.5rem; }
+.bc-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+}
+.bc-found {
+  border-left: 3px solid var(--accent);
+  padding: 0.35rem 0 0.35rem 0.6rem;
+  margin-top: 0.4rem;
+}
+.bc-number {
+  display: inline-block;
+  min-width: 1.9rem;
+  padding: 0.05rem 0.35rem;
+  margin: 0 0.15rem 0.2rem 0;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  text-align: center;
+  background: var(--success-dim);
+  color: var(--success);
+}
+.bc-number.missing { background: var(--warning-dim); color: var(--warning); }
+.bc-chip {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
+  font-size: 0.78rem;
+}
+.bc-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.bc-tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.min-w-0 { min-width: 0; }

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Download, RevealedPost
 from app.routers.api import status as api_status
-from app.services import ai
+from app.services import ai, prowlarr
 from app.settings_store import get_setting
 from app.templating import templates
 
@@ -55,8 +55,16 @@ def status_cards(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/search", response_class=HTMLResponse)
-def search(request: Request):
-    return _page(request, "search.html")
+def search(request: Request, db: Session = Depends(get_db)):
+    return _page(request, "search.html", prowlarr_on=prowlarr.configured(db))
+
+
+@router.get("/wishlist", response_class=HTMLResponse)
+def wishlist_page(request: Request, db: Session = Depends(get_db)):
+    from app.services import wishlist
+    from app.services.pipeline import abs_configured
+    return _page(request, "wishlist.html", kinds=wishlist.KINDS, abs_ready=abs_configured(db),
+                 check_hours=get_setting(db, "wishlist_check_hours"))
 
 
 @router.get("/downloads", response_class=HTMLResponse)
@@ -92,4 +100,4 @@ def use_phone():
 
 
 # Desktop page → phone page, for phones (query string kept: /downloads?highlight=5 from a notification).
-PHONE_PAGES = {"/": "/m", "/downloads": "/m/downloads", "/saved": "/m/saved"}
+PHONE_PAGES = {"/": "/m", "/downloads": "/m/downloads", "/saved": "/m/saved", "/wishlist": "/m/wishlist"}
