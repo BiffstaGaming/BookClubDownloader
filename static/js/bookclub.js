@@ -7,16 +7,22 @@
   document.body.addEventListener('htmx:beforeRequest', function (evt) {
     var elt = evt.detail.elt;
     if (elt && elt.hasAttribute && elt.hasAttribute('data-bc-quiet')) return;
-    evt.detail.xhr.__bcCounted = true;
+    var xhr = evt.detail.xhr;
+    xhr.__bcCounted = true;
     inFlight++;
     bar.style.display = 'flex';
+    // Safety net: never leave the bar up for a request htmx didn't report back on.
+    setTimeout(function () { if (xhr.__bcCounted) finish(xhr); }, 60000);
   });
-  document.body.addEventListener('htmx:afterRequest', function (evt) {
-    var xhr = evt.detail.xhr;
-    if (!xhr || !xhr.__bcCounted) return;
+  function finish(xhr) {
     xhr.__bcCounted = false;
     inFlight = Math.max(0, inFlight - 1);
     if (!inFlight) bar.style.display = 'none';
+  }
+  document.body.addEventListener('htmx:afterRequest', function (evt) {
+    var xhr = evt.detail.xhr;
+    if (!xhr || !xhr.__bcCounted) return;
+    finish(xhr);
   });
 
   // ── failed requests: say so instead of silently doing nothing ──
@@ -40,6 +46,19 @@
   });
   document.body.addEventListener('htmx:sendError', function () {
     showError('BookClub is not reachable — it may be restarting. Try again in a moment.');
+  });
+
+  // New content in a panel (e.g. "Saved." after Save, or the Audible list): show it from
+  // the top. Without this you stay scrolled down at the buttons and the message is out of view.
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    var t = evt.detail.target;
+    if (!t || !t.innerHTML.trim()) return;
+    if (t.classList.contains('m-sheet')) {
+      t.scrollTop = 0;
+    } else if (t.id === 'convert-panel' || t.id === 'saved-panel') {
+      var top = t.getBoundingClientRect().top;
+      if (top < 0 || top > window.innerHeight) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   });
 
   // A result reported below a long list (e.g. "Send to NZBGet"): bring it into view.
