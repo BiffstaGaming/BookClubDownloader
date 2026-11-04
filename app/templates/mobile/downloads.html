@@ -1,0 +1,62 @@
+{% extends "mobile/base.html" %}
+{% block title %}BookClub — Downloads{% endblock %}
+{% block heading %}Downloads{% endblock %}
+
+{% block content %}
+<div class="m-seg" role="tablist">
+  <button type="button" data-filter="active" onclick="mSetFilter('active')">Active</button>
+  <button type="button" data-filter="attention" onclick="mSetFilter('attention')">Needs me</button>
+  <button type="button" data-filter="all" onclick="mSetFilter('all')">All</button>
+</div>
+
+<form id="dl-controls" style="display:none;">
+  <input type="hidden" id="dl-filter-input" name="dl_filter" value="active" />
+  <input type="hidden" name="dl_limit" value="40" />
+</form>
+
+<div id="download-rows" data-bc-quiet
+     hx-post="/downloads/sync-status" hx-include="#dl-controls"
+     hx-trigger="every 10s, refreshDownloads from:body" hx-swap="innerHTML"></div>
+
+<!-- Convert / Find on Audible / Log / Other NZB open here, full screen -->
+<div id="convert-panel" class="m-sheet" data-bc-clear-when-empty></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var params = new URLSearchParams(location.search);
+var highlightId = params.get('highlight');
+
+function mLoad() {
+  htmx.ajax('POST', '/downloads/sync-status', {
+    source: '#download-rows', target: '#download-rows', swap: 'innerHTML',
+    values: { dl_filter: document.getElementById('dl-filter-input').value, dl_limit: 40 }
+  });
+}
+function mApply(filter) {
+  document.getElementById('dl-filter-input').value = filter;
+  document.querySelectorAll('.m-seg button').forEach(function (b) {
+    b.classList.toggle('active', b.dataset.filter === filter);
+  });
+}
+function mSetFilter(filter) {
+  mApply(filter);
+  bcStore.set('m-downloads', filter);
+  mLoad();
+}
+// A link from a notification or the Home tab picks the filter; otherwise the last one used.
+mApply(highlightId ? 'all' : (params.get('filter') || bcStore.get('m-downloads', 'active')));
+mLoad();
+
+document.body.addEventListener('htmx:afterSettle', function (evt) {
+  if (!highlightId || evt.detail.elt.id !== 'download-rows') return;
+  var card = document.querySelector('#download-rows [data-dl-id="' + CSS.escape(highlightId) + '"]');
+  if (card) {
+    card.classList.add('bc-highlight-card');
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    highlightId = null;
+  }
+});
+
+</script>
+{% endblock %}

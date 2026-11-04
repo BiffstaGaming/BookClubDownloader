@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 from markupsafe import escape
-from sqlalchemy import and_, func, not_
+from sqlalchemy import and_, func, not_, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -341,6 +341,16 @@ def _apply_dl_filter(q, dl_filter: str):
             func.coalesce(Download.abs_status, "imported").in_(("imported", "skipped")),
         )
         q = q.filter(not_(finished))
+    elif dl_filter == "attention":
+        # Waiting for you: failures, and finished downloads the automatic match handed over.
+        waiting = and_(Download.status == "downloaded", Download.m4b_status.is_(None),
+                       Download.download_metadata.like('%"auto_processed": true%'))
+        q = q.filter(or_(
+            Download.status == "failed",
+            Download.m4b_status.in_(("m4b_failed", "move_failed")),
+            Download.abs_status.in_(("not_found", "failed")),
+            waiting,
+        ))
     return q
 
 

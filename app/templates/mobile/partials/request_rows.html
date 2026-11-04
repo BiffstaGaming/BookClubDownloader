@@ -1,0 +1,54 @@
+{% set badges = {
+  "pending": ("bc-badge-muted", "hourglass", "Waiting"),
+  "searching": ("bc-conf-mid", "search", "Searching"),
+  "needs_choice": ("bc-conf-mid", "question-circle", "Which one?"),
+  "sent": ("bc-badge-success", "send-check", "Downloading"),
+  "duplicate": ("bc-conf-mid", "files", "Already have it?"),
+  "not_found": ("bc-badge-danger", "x-circle", "Not found"),
+  "failed": ("bc-badge-danger", "exclamation-triangle", "Failed"),
+  "cancelled": ("bc-badge-muted", "slash-circle", "Cancelled"),
+} %}
+{# Messages go outside the auto-refreshing list (out-of-band); see the desktop version. #}
+{% if notice is not none %}<div id="request-notice" hx-swap-oob="true">{% if notice %}{{ notice | safe }}{% endif %}</div>{% endif %}
+{% if requests %}
+<div class="m-section">Requests</div>
+{% for r in requests[:5] %}
+{% set cls, icon, label = badges.get(r.status, ("bc-badge-muted", "dot", r.status)) %}
+<div class="m-card">
+  <div class="d-flex justify-content-between align-items-start gap-2">
+    <div class="m-card-title">{{ r.query }}</div>
+    <span class="badge {{ cls }} flex-shrink-0"><i class="bi bi-{{ icon }} me-1"></i>{{ label }}</span>
+  </div>
+  <div class="small text-muted mt-1">{% if r.requested_by %}{{ r.requested_by }} · {% endif %}{{ r.created_at | localtime }}</div>
+  {% if r.message %}<div class="small text-muted mt-2">{{ r.message }}</div>{% endif %}
+
+  {% if r.status == "needs_choice" %}
+  <div class="d-grid gap-2 mt-2">
+    {% for o in r.parsed_options %}
+    <button class="btn bc-btn-outline text-start"
+            hx-post="/downloads/requests/{{ r.id }}/choose" hx-vals='{"option": {{ o.option }}}'
+            hx-target="#request-rows" hx-swap="innerHTML">{{ o.title }}</button>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="m-actions">
+    {% if r.status == "sent" and r.download_id %}
+    <a class="btn bc-btn-outline btn-sm" href="/m/downloads?highlight={{ r.download_id }}"><i class="bi bi-arrow-down-circle me-1"></i>Download</a>
+    {% endif %}
+    {% if r.status == "duplicate" %}
+    <button class="btn bc-btn-sm-primary btn-sm" hx-post="/downloads/requests/{{ r.id }}/choose" hx-vals='{"force": "1"}'
+            hx-target="#request-rows" hx-swap="innerHTML"><i class="bi bi-send me-1"></i>Get anyway</button>
+    {% endif %}
+    {% if r.status in ("not_found", "failed") %}
+    <button class="btn bc-btn-sm-primary btn-sm" hx-post="/downloads/requests/{{ r.id }}/retry"
+            hx-target="#request-rows" hx-swap="innerHTML"><i class="bi bi-arrow-repeat me-1"></i>Try again</button>
+    {% endif %}
+    <button class="btn btn-sm ms-auto" style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
+            hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows" hx-swap="innerHTML"
+            hx-confirm="{{ 'Stop this request?' if r.status in ('pending', 'searching') else 'Remove this request from the list?' }}"
+            aria-label="Remove request"><i class="bi bi-x-lg"></i></button>
+  </div>
+</div>
+{% endfor %}
+{% endif %}

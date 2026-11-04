@@ -3,7 +3,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import engine, migrate_db
@@ -29,6 +29,7 @@ from app.services.pipeline import pipeline  # noqa: E402 — needs the tables ab
 from app.services import forum_cache  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.routers import saved as saved_router  # noqa: E402
+from app.routers import mobile as mobile_router  # noqa: E402
 
 # Once: save the forum posts behind every download already in the history.
 _db = SessionLocal()
@@ -69,11 +70,25 @@ async def refuse_cross_site_changes(request: Request, call_next):
         return PlainTextResponse("Cross-site request refused", status_code=403)
     return await call_next(request)
 
+
+@app.middleware("http")
+async def send_phones_to_the_phone_ui(request: Request, call_next):
+    """A phone opening a desktop page gets the /m version (unless it chose "Desktop view")."""
+    if (request.method == "GET" and request.url.path in mobile_router.PHONE_PAGES
+            and "hx-request" not in request.headers and mobile_router.wants_phone_ui(request)):
+        target = mobile_router.PHONE_PAGES[request.url.path]
+        if request.url.path == "/" and request.url.query:
+            target = "/m/search"  # a saved search link (/?q=...)
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(target + query, status_code=307)
+    return await call_next(request)
+
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(downloads.router, prefix="/downloads", tags=["downloads"])
 app.include_router(settings_router.router, prefix="/settings", tags=["settings"])
 app.include_router(logs_router.router, prefix="/logs", tags=["logs"])
 app.include_router(saved_router.router, prefix="/saved", tags=["saved"])
+app.include_router(mobile_router.router, prefix="/m", tags=["phone"])
 app.include_router(api_router.router, prefix="/api", tags=["api"])
 
 

@@ -1,0 +1,60 @@
+{# Phone version of the NZB list: used after a forum post is revealed, for "Other NZB"
+   on a failed download, and for "Choose NZB" on a saved post. #}
+<div class="bc-card">
+  <div class="bc-card-header d-flex align-items-center gap-2">
+    <i class="bi bi-cloud-download text-accent"></i>
+    <span class="flex-grow-1 text-truncate">NZBs for <code class="bc-code-accent">{{ search_term }}</code></span>
+    <button type="button" class="btn bc-btn-outline btn-sm" aria-label="Close"
+            onclick="this.closest('.bc-card').parentElement.innerHTML=''"><i class="bi bi-x-lg"></i></button>
+  </div>
+  <div class="bc-card-body">
+    {% if password %}
+    <div class="mb-2"><span class="bc-password-badge"><i class="bi bi-key-fill me-1"></i>{{ password }}</span></div>
+    {% endif %}
+    {% if duplicates %}
+    <div class="alert alert-warning">
+      <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>You may already have this book:</strong>
+      <ul class="mb-0 mt-1">{% for reason in duplicates %}<li>{{ reason }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% for note in notes or [] %}
+    <div class="alert alert-info py-2"><i class="bi bi-info-circle me-2"></i>{{ note }}</div>
+    {% endfor %}
+
+    {% for nzb in results %}
+    <div class="m-card mb-2" style="background:var(--bg-primary);">
+      <div class="m-card-title" style="font-size:0.9rem;">{{ nzb.title }}</div>
+      <div class="small text-muted mt-1">
+        {{ "Binsearch" if nzb.source == "binsearch" else "NZBKing" }}
+        {% if nzb.size %} · {{ nzb.size }}{% endif %}{% if nzb.age %} · {{ nzb.age }}{% endif %}
+      </div>
+      <form hx-post="/downloads/send" hx-target="#download-status" hx-swap="innerHTML" class="mt-2">
+        <input type="hidden" name="nzb_hash" value="{{ nzb.nzb_hash }}" />
+        <input type="hidden" name="nzb_source" value="{{ nzb.source or 'nzbking' }}" />
+        <input type="hidden" name="nzb_title" value="{{ nzb.title }}" />
+        <input type="hidden" name="search_term" value="{{ search_term }}" />
+        <input type="hidden" name="password" value="{{ password or '' }}" />
+        <input type="hidden" name="post_title" value="{{ post_title or '' }}" />
+        <input type="hidden" name="topic_id" value="{{ topic_id or '' }}" />
+        <input type="hidden" name="msg_id" value="{{ msg_id or '' }}" />
+        <input type="hidden" name="book_title" value="{{ book_title or '' }}" />
+        <input type="hidden" name="book_author" value="{{ book_author or '' }}" />
+        <input type="hidden" name="book_series" value="{{ book_series or '' }}" />
+        <input type="hidden" name="book_series_part" value="{{ book_series_part or '' }}" />
+        <input type="hidden" name="book_narrator" value="{{ book_narrator or '' }}" />
+        <input type="hidden" name="replace_id" value="{{ replace_id or '' }}" />
+        <button type="submit" class="btn bc-btn-sm-success w-100">
+          <span class="spinner-border spinner-border-sm htmx-indicator me-2" role="status"></span>
+          <i class="bi bi-send-fill me-1"></i>{{ "Use this NZB" if replace_id else "Send to NZBGet" }}
+        </button>
+      </form>
+    </div>
+    {% else %}
+    <div class="m-empty"><i class="bi bi-cloud-slash"></i>No NZBs found for <strong>{{ search_term }}</strong>.
+      The files may have expired.</div>
+    {% endfor %}
+
+    <!-- The result of "Send to NZBGet" (scrolled into view) -->
+    <div id="download-status"></div>
+  </div>
+</div>

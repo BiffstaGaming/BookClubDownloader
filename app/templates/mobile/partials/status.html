@@ -1,0 +1,71 @@
+{% set attention = (s.needs_review or 0) + (s.failed or 0) + (s.requests_waiting or 0) %}
+<div class="m-section">Now</div>
+
+{% if converting %}
+<div class="m-card">
+  <div class="small text-muted mb-1"><span class="spinner-border spinner-border-sm text-accent me-1" style="width:.7rem;height:.7rem;"></span>Converting</div>
+  <div class="m-card-title">{{ converting.display_title }}</div>
+  <div class="progress mt-2 bc-mini-progress">
+    <div class="progress-bar" style="width:{{ converting.m4b_progress or 0 }}%;background:var(--accent);"></div>
+  </div>
+  <div class="small text-muted mt-1">{{ converting.m4b_progress or 0 }}%</div>
+</div>
+{% endif %}
+
+{% for dl in downloading %}
+<div class="m-card">
+  <div class="small text-muted mb-1"><i class="bi bi-arrow-down-circle me-1"></i>Downloading</div>
+  <div class="m-card-title">{{ dl.display_title }}</div>
+  {% if dl.download_progress is not none %}
+  <div class="progress mt-2 bc-mini-progress">
+    <div class="progress-bar" style="width:{{ dl.download_progress }}%;background:var(--accent);"></div>
+  </div>
+  <div class="small text-muted mt-1">{{ dl.download_progress }}%</div>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if not converting and not downloading %}
+<div class="m-card text-muted"><i class="bi bi-moon-stars me-2"></i>Nothing downloading or converting right now.</div>
+{% endif %}
+
+<div class="m-tiles mt-2">
+  <a class="m-tile" href="/m/downloads">
+    <div class="m-num">{{ s.downloading }}</div><div class="m-lbl">Downloading</div>
+  </a>
+  <a class="m-tile" href="/m/downloads">
+    <div class="m-num">{{ s.queued }}</div><div class="m-lbl">Queued</div>
+  </a>
+  <a class="m-tile {{ 'm-attn' if attention else '' }}" href="/m/downloads?filter=attention">
+    <div class="m-num">{{ attention }}</div><div class="m-lbl">Need you</div>
+  </a>
+</div>
+
+{% if s.nzbget_reachable is sameas false %}
+<div class="alert alert-warning mt-3 mb-0"><i class="bi bi-exclamation-triangle me-2"></i>NZBGet isn't answering.</div>
+{% endif %}
+
+<div class="m-section">Recently added</div>
+{% if recent %}
+{% for dl in recent %}
+{% set meta = dl.parsed_metadata %}
+<div class="m-card d-flex gap-3 align-items-center">
+  {% if meta.get('cover_url') %}
+  <img src="{{ meta.get('cover_url') }}" alt="" class="m-cover" loading="lazy" referrerpolicy="no-referrer" />
+  {% else %}
+  <div class="m-cover"><i class="bi bi-book"></i></div>
+  {% endif %}
+  <div class="flex-grow-1 min-w-0">
+    <div class="m-card-title">{{ dl.display_title }}</div>
+    <div class="small text-muted">{{ meta.get('author', '') }}{% if dl.requested_by %} · for {{ dl.requested_by }}{% endif %}</div>
+    <div class="small text-muted">{{ dl.imported_at | localtime }}</div>
+  </div>
+  {% if abs_url and dl.abs_item_id %}
+  <a class="btn bc-btn-outline" href="{{ abs_url }}/item/{{ dl.abs_item_id }}" target="_blank" rel="noopener"
+     aria-label="Open in Audiobookshelf"><i class="bi bi-collection-play"></i></a>
+  {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<div class="m-card text-muted">Nothing imported yet.</div>
+{% endif %}

@@ -1,0 +1,45 @@
+{% if posts %}
+{% for p in posts %}
+{% set dl = downloads.get(p.search_term) %}
+<div class="m-card m-saved" data-saved-id="{{ p.id }}">
+  <div class="m-card-title">{{ p.display_title }}</div>
+  <div class="small text-muted">
+    {% if p.author %}{{ p.author }}{% endif %}
+    {% if p.series %} · {{ p.series }}{% if p.series_part %} #{{ p.series_part }}{% endif %}{% endif %}
+    {% if p.narrator %} · read by {{ p.narrator }}{% endif %}
+  </div>
+  <div class="m-kv mt-2">
+    <code class="bc-code">{{ p.search_term }}</code>
+    {% if p.password %}<span class="bc-password-badge ms-1"><i class="bi bi-key-fill me-1"></i>{{ p.password }}</span>{% endif %}
+  </div>
+  <div class="small text-muted mt-2">
+    Saved {{ p.revealed_at | localtime }}{% if p.times_sent %} · sent {{ p.times_sent }}×{% endif %}
+    {% if dl %}
+    · <a href="/m/downloads?highlight={{ dl.id }}" class="text-decoration-none">
+      {% if dl.abs_status == "imported" %}<span class="badge bc-badge-success">In Audiobookshelf</span>
+      {% elif dl.m4b_status == "converted" %}<span class="badge bc-badge-success">Converted</span>
+      {% elif dl.status == "failed" or dl.m4b_status in ("m4b_failed", "move_failed") %}<span class="badge bc-badge-danger">Failed</span>
+      {% elif dl.status == "sent" %}<span class="badge bc-badge-muted">Downloading</span>
+      {% else %}<span class="badge bc-badge-muted">{{ dl.status }}</span>{% endif %}
+    </a>
+    {% endif %}
+  </div>
+  {% if notices.get(p.id) %}<div class="mt-2">{{ notices.get(p.id) | safe }}</div>{% endif %}
+  <div class="m-actions">
+    <button class="btn bc-btn-sm-success flex-grow-1" hx-post="/saved/{{ p.id }}/send" hx-target="closest .m-saved" hx-swap="outerHTML">
+      <span class="spinner-border spinner-border-sm htmx-indicator me-2" role="status"></span>
+      <i class="bi bi-send-fill me-1"></i>Send to NZBGet
+    </button>
+    <button class="btn bc-btn-outline btn-sm" hx-get="/saved/{{ p.id }}/nzbs" hx-target="#saved-panel" hx-swap="innerHTML"
+            aria-label="Choose NZB"><i class="bi bi-list-ul me-1"></i>Choose</button>
+    <button class="btn btn-sm" style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
+            hx-delete="/saved/{{ p.id }}" hx-target="closest .m-saved" hx-swap="outerHTML"
+            hx-confirm="Forget this saved post? (Downloads and files are not touched.)" aria-label="Forget">
+      <i class="bi bi-trash3"></i>
+    </button>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="m-empty"><i class="bi bi-bookmark"></i>Nothing saved yet — posts you reveal on the Search tab appear here.</div>
+{% endif %}

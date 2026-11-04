@@ -1,0 +1,31 @@
+{% extends "mobile/base.html" %}
+{% block title %}BookClub — Saved{% endblock %}
+{% block heading %}Saved posts{% endblock %}
+
+{% block content %}
+<div class="small text-muted mb-2">
+  Every revealed forum post (<span id="saved-total">{{ total }}</span>). Send a book to NZBGet again without the forum.
+</div>
+<form id="saved-controls" class="m-search" onsubmit="return false;">
+  <input type="search" name="q" id="saved-q" class="form-control bc-input" placeholder="Title, author, series…"
+         autocomplete="off" enterkeyhint="search"
+         hx-get="/saved/rows" hx-trigger="input changed delay:300ms" hx-target="#saved-rows" hx-include="#saved-controls" />
+  <input type="hidden" name="limit" value="100" />
+</form>
+
+<div id="saved-rows" hx-get="/saved/rows" hx-trigger="savedChanged" hx-include="#saved-controls"></div>
+
+<!-- "Choose NZB" opens here, full screen -->
+<div id="saved-panel" class="m-sheet" data-bc-clear-when-empty></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  var q = document.getElementById('saved-q');
+  q.value = bcStore.get('m-saved', '');
+  q.addEventListener('input', function () { bcStore.set('m-saved', q.value); });
+  document.addEventListener('DOMContentLoaded', function () { htmx.trigger('#saved-rows', 'savedChanged'); });
+})();
+</script>
+{% endblock %}

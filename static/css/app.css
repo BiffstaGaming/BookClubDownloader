@@ -625,3 +625,6 @@ tr.bc-highlight > td {
 .bc-candidate:hover { background: rgba(255,255,255,0.05); }
 .bc-description { line-height: 1.4; }
 .min-w-0 { min-width: 0; }
+
+/* Small progress bar under a status badge */
+.bc-mini-progress { height: 3px; max-width: 100px; }

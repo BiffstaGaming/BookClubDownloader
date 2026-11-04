@@ -1,0 +1,23 @@
+{% extends "mobile/base.html" %}
+{% block title %}BookClub{% endblock %}
+{% block heading %}BookClub{% endblock %}
+
+{% block content %}
+<!-- Ask for a book: BookClub finds the forum post, reveals it and starts the download -->
+<form class="m-card" hx-post="/downloads/requests" hx-target="#request-rows" hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.successful) this.reset()">
+  <label for="m-request" class="fw-semibold mb-2 d-block"><i class="bi bi-lightning-charge text-accent me-1"></i>Get a book</label>
+  <input type="text" id="m-request" name="query" class="form-control bc-input mb-2" required minlength="2"
+         placeholder="e.g. Project Hail Mary by Andy Weir" autocomplete="off" enterkeyhint="go" />
+  <button type="submit" class="btn bc-btn-primary w-100">
+    <span class="spinner-border spinner-border-sm htmx-indicator me-2" role="status"></span>
+    Find &amp; download
+  </button>
+</form>
+
+<div id="request-notice"></div>
+<div id="request-rows" data-bc-quiet
+     hx-get="/downloads/requests" hx-trigger="load, every 10s, refreshRequests from:body" hx-swap="innerHTML"></div>
+
+<div id="m-status" data-bc-quiet hx-get="/m/status" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>
+{% endblock %}

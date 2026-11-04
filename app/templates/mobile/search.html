@@ -1,0 +1,106 @@
+{% extends "mobile/base.html" %}
+{% block title %}BookClub — Search{% endblock %}
+{% block heading %}Search the forum{% endblock %}
+
+{% block content %}
+<div class="m-search">
+  <form id="forum-search-form" hx-post="/search/forum" hx-target="#forum-results" hx-swap="innerHTML"
+        hx-indicator="#forum-search-spinner" class="d-flex gap-2">
+    <input type="search" id="forum-query" name="query" class="form-control bc-input" required
+           placeholder="Title or author" autocomplete="off" enterkeyhint="search"
+           data-bc-quiet hx-get="/search/local" hx-trigger="input changed delay:300ms"
+           hx-target="#local-topics" hx-swap="innerHTML" hx-sync="this:replace" />
+    <button type="submit" class="btn bc-btn-primary" aria-label="Search">
+      <span id="forum-search-spinner" class="spinner-border spinner-border-sm htmx-indicator" role="status"></span>
+      <i class="bi bi-search"></i>
+    </button>
+    <button type="button" class="btn bc-btn-outline d-none" id="clear-search" onclick="mClearSearch()" aria-label="New search">
+      <i class="bi bi-x-lg"></i>
+    </button>
+  </form>
+  <div id="local-topics" class="mt-2"></div>
+</div>
+
+<div id="forum-results"></div>
+<div id="post-detail" class="mt-2"></div>
+<div id="nzb-results" class="mt-2"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Remember the search (shared with the desktop Search page) and bring it back
+// when you return to this tab. Thanked posts stay revealed, so nothing is thanked twice.
+var restoring = false;
+function mState() { return bcStore.get('search', {}); }
+function mSave(state) {
+  bcStore.set('search', state);
+  document.getElementById('clear-search').classList.toggle('d-none', !state.q);
+}
+function mClearSearch() {
+  bcStore.del('search');
+  ['forum-results', 'post-detail', 'nzb-results', 'local-topics'].forEach(function (id) {
+    document.getElementById(id).innerHTML = '';
+  });
+  var q = document.getElementById('forum-query');
+  q.value = '';
+  q.focus();
+  document.getElementById('clear-search').classList.add('d-none');
+}
+function mOpenTopic(card) {
+  document.querySelectorAll('#forum-results .m-topic').forEach(function (c) {
+    c.classList.toggle('bc-highlight-card', c === card);
+  });
+  document.getElementById('nzb-results').innerHTML = '';
+}
+
+document.body.addEventListener('htmx:configRequest', function (evt) {
+  if (restoring) return;
+  var path = evt.detail.path, params = evt.detail.parameters, state = mState();
+  if (path === '/search/forum') {
+    ['post-detail', 'nzb-results', 'local-topics'].forEach(function (id) { document.getElementById(id).innerHTML = ''; });
+    document.getElementById('forum-query').blur();  // put the keyboard away
+    mSave({ q: params.query });
+  } else if (path.indexOf('/search/topic/') === 0) {
+    mSave({ q: state.q, topic: path.split('/').pop().split('?')[0] });
+  } else if (path === '/search/thank') {
+    mSave({ q: state.q, topic: params.topic_id });
+  } else if (path === '/search/nzb') {
+    var nzb = {};
+    Object.keys(params).forEach(function (k) { nzb[k] = params[k]; });
+    mSave({ q: state.q, topic: state.topic, nzb: nzb });
+  }
+});
+
+// Scroll a freshly opened post or NZB list into view (not while restoring).
+document.body.addEventListener('htmx:afterSwap', function (evt) {
+  var id = evt.detail.target.id;
+  if (!restoring && (id === 'post-detail' || id === 'nzb-results') && evt.detail.target.innerHTML.trim()) {
+    setTimeout(function () { evt.detail.target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+  }
+});
+
+(function restore() {
+  var state = mState();
+  if (!state.q) return;
+  restoring = true;
+  document.getElementById('forum-query').value = state.q;
+  document.getElementById('clear-search').classList.remove('d-none');
+  htmx.ajax('POST', '/search/forum', { source: '#forum-results', target: '#forum-results', swap: 'innerHTML',
+                                       values: { query: state.q } })
+    .then(function () {
+      if (!state.topic) return;
+      var card = document.querySelector('#forum-results .m-topic[data-topic-id="' + CSS.escape(state.topic) + '"]');
+      if (card) mOpenTopic(card);
+      return htmx.ajax('GET', '/search/topic/' + encodeURIComponent(state.topic),
+                       { source: '#post-detail', target: '#post-detail', swap: 'innerHTML' });
+    })
+    .then(function () {
+      if (state.topic && state.nzb) {
+        return htmx.ajax('POST', '/search/nzb', { source: '#nzb-results', target: '#nzb-results', swap: 'innerHTML',
+                                                  values: state.nzb });
+      }
+    })
+    .finally(function () { restoring = false; });
+})();
+</script>
+{% endblock %}

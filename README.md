@@ -98,6 +98,16 @@ Assistant API needs its own token.
 - The Search page, Downloads filters and Logs filters are remembered when you
   switch pages or tabs. Times are shown in your browser's timezone.
 
+## On your phone
+
+Phones get a separate layout at `/m` (opening any BookClub page on a phone goes
+there): a bottom tab bar with **Home** (get a book, what's happening now, recently
+added), **Search**, **Downloads** (cards, plus a *Needs me* filter), **Saved** and
+**More**. Panels such as *Convert* open full screen, and the Back button closes
+them. In Chrome's menu, *Add to Home screen* gives it an app icon. *More → Use the
+desktop view* switches back to the full pages; *Phone view* in the desktop menu
+switches again.
+
 ## Encoding speed
 
 Each finished book's log line says how it was converted and how long it took,
