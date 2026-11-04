@@ -80,6 +80,11 @@ document.body.addEventListener('htmx:afterSwap', function (evt) {
 });
 
 (function restore() {
+  var linked = new URLSearchParams(location.search).get('q');
+  if (linked) {
+    mSave({ q: linked });
+    history.replaceState(null, '', '/m/search');
+  }
   var state = mState();
   if (!state.q) return;
   restoring = true;

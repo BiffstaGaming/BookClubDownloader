@@ -79,3 +79,14 @@ def test_manifest_and_icons_are_served(client):
     manifest = client.get("/static/manifest.webmanifest")
     assert manifest.status_code == 200 and manifest.json()["start_url"] == "/m"
     assert client.get("/static/icons/icon-192.png").content[:4] == b"\x89PNG"
+
+
+def test_long_choice_lists_show_more_and_link_to_search(client, db):
+    from app.models import BookRequest
+    options = [{"option": i, "topic_id": str(i), "title": f"RinaKent- Book {i}"} for i in range(1, 9)]
+    db.add(BookRequest(query="Rina kent", status="needs_choice", options=json.dumps(options)))
+    db.commit()
+    for headers, search_link in (({}, "/?q=Rina%20kent"), (MOBILE_UI, "/m/search?q=Rina%20kent")):
+        page = client.get("/downloads/requests", headers=headers).text
+        assert "RinaKent- Book 8" in page and "Show 3 more" in page and search_link in page
+        assert page.count('hx-vals=\'{"option": ') == 8

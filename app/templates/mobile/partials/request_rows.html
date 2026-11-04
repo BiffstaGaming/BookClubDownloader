@@ -23,13 +23,25 @@
   {% if r.message %}<div class="small text-muted mt-2">{{ r.message }}</div>{% endif %}
 
   {% if r.status == "needs_choice" %}
-  <div class="d-grid gap-2 mt-2">
-    {% for o in r.parsed_options %}
+  {% set options = r.parsed_options %}
+  {% macro option_button(o, rid) %}
     <button class="btn bc-btn-outline text-start"
-            hx-post="/downloads/requests/{{ r.id }}/choose" hx-vals='{"option": {{ o.option }}}'
+            hx-post="/downloads/requests/{{ rid }}/choose" hx-vals='{"option": {{ o.option }}}'
             hx-target="#request-rows" hx-swap="innerHTML">{{ o.title }}</button>
-    {% endfor %}
+  {% endmacro %}
+  <div class="d-grid gap-2 mt-2">
+    {% for o in options[:5] %}{{ option_button(o, r.id) }}{% endfor %}
   </div>
+  {% if options | length > 5 %}
+  <details class="mt-2" id="req-more-{{ r.id }}" data-bc-keep-open>
+    <summary class="btn bc-btn-outline w-100">Show {{ options | length - 5 }} more</summary>
+    <div class="d-grid gap-2 mt-2">
+      {% for o in options[5:] %}{{ option_button(o, r.id) }}{% endfor %}
+    </div>
+  </details>
+  {% endif %}
+  <a class="btn bc-btn-outline w-100 mt-2" href="/m/search?q={{ r.query | urlencode }}">
+    <i class="bi bi-search me-2"></i>Not listed? Open in Search</a>
   {% endif %}
 
   <div class="m-actions">

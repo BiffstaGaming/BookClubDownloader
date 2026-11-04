@@ -107,6 +107,21 @@
     document.querySelectorAll('.m-sheet').forEach(function (sheet) { sheet.innerHTML = ''; });
   });
 
+  // Sections marked <details id="..." data-bc-keep-open> stay open when the list
+  // around them refreshes (e.g. "Show more" in the requests list every 10 s).
+  var keptOpen = new Set();
+  document.body.addEventListener('htmx:beforeSwap', function () {
+    document.querySelectorAll('details[data-bc-keep-open][id]').forEach(function (d) {
+      if (d.open) keptOpen.add(d.id); else keptOpen.delete(d.id);
+    });
+  });
+  document.body.addEventListener('htmx:afterSettle', function () {
+    keptOpen.forEach(function (id) {
+      var d = document.getElementById(id);
+      if (d) d.open = true;
+    });
+  });
+
   // Small persistence helpers used by the pages
   window.bcStore = {
     get: function (key, fallback) {

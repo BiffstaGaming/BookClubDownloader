@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 AUTO_PICK_SCORE = 0.85
 AUTO_PICK_MARGIN = 0.10
 AI_PICK_CONFIDENCE = 75
-MAX_OPTIONS = 5
+MAX_OPTIONS = 25  # the best few are shown first; the rest behind "Show more"
 
 ACTIVE_STATUSES = ("pending", "searching")
 FINISHED_STATUSES = ("sent", "duplicate", "not_found", "failed", "cancelled")

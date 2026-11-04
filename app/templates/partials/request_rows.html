@@ -28,15 +28,27 @@
           <span class="badge {{ cls }}"><i class="bi bi-{{ icon }} me-1"></i>{{ label }}</span>
           {% if r.message %}<div class="text-muted small mt-1 bc-reason">{{ r.message }}</div>{% endif %}
           {% if r.status == "needs_choice" %}
-          <div class="d-flex flex-column gap-1 mt-2">
-            {% for o in r.parsed_options %}
+          {% set options = r.parsed_options %}
+          {% macro option_button(o, rid) %}
             <button class="btn btn-sm bc-btn-outline text-start"
-                    hx-post="/downloads/requests/{{ r.id }}/choose" hx-vals='{"option": {{ o.option }}}'
+                    hx-post="/downloads/requests/{{ rid }}/choose" hx-vals='{"option": {{ o.option }}}'
                     hx-target="#request-rows" hx-swap="innerHTML">
               <span class="badge bc-badge-muted me-2">{{ o.option }}</span>{{ o.title }}
             </button>
-            {% endfor %}
+          {% endmacro %}
+          <div class="d-flex flex-column gap-1 mt-2">
+            {% for o in options[:5] %}{{ option_button(o, r.id) }}{% endfor %}
           </div>
+          {% if options | length > 5 %}
+          <details class="mt-1" id="req-more-{{ r.id }}" data-bc-keep-open>
+            <summary class="small text-accent" style="cursor:pointer;">Show {{ options | length - 5 }} more</summary>
+            <div class="d-flex flex-column gap-1 mt-1">
+              {% for o in options[5:] %}{{ option_button(o, r.id) }}{% endfor %}
+            </div>
+          </details>
+          {% endif %}
+          <a class="small text-accent d-inline-block mt-1" href="/?q={{ r.query | urlencode }}">
+            <i class="bi bi-search me-1"></i>Not listed? See every forum result</a>
           {% endif %}
         </td>
         <td class="text-end text-nowrap" style="width:1%;">
