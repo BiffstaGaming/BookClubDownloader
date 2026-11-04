@@ -209,6 +209,7 @@ def test_convert_success_files_book_and_deletes_source(db, settings, tmp_path, m
     assert not src.exists(), "source folder should be deleted after a successful conversion"
     assert dl.abs_status == "skipped"  # ABS not configured
     cmd = commands[0]
+    cmd = cmd[cmd.index("m4b-tool"):]  # on Linux it runs under nice/taskset
     assert cmd[:3] == ["m4b-tool", "merge", str(src)]
     assert "--writer=Colin Mace" in cmd and "--series-part=6" in cmd
     assert any(a.startswith("--cover=") for a in cmd)
@@ -279,7 +280,8 @@ def test_single_m4b_is_copied_and_tagged_with_tone(db, settings, tmp_path, monke
     run(Pipeline().convert(dl_id))
     dl = reload(db, dl_id)
     assert dl.m4b_status == "converted", dl.error_message
-    assert commands[0][:2] == ["tone", "tag"] and "--meta-narrator=Colin Mace" in commands[0]
+    tone_cmd = commands[0][commands[0].index("tone"):]
+    assert tone_cmd[:2] == ["tone", "tag"] and "--meta-narrator=Colin Mace" in tone_cmd
     assert open(dl.m4b_path, "rb").read() == b"already-m4b"
 
 
@@ -438,7 +440,8 @@ def test_failed_conversion_logs_ffmpeg_error_and_free_space(db, settings, tmp_pa
     dl = reload(db, dl_id)
     assert dl.m4b_status == "m4b_failed"
     assert "ffmpeg: [mp3 @ 0x1] Header missing" in dl.error_message
-    assert calls and calls[0][calls[0].index("-i") + 1] == str(bad)
+    ffmpeg = next(c for c in calls if c[0] == "ffmpeg")
+    assert ffmpeg[ffmpeg.index("-i") + 1] == str(bad)
     assert "Free space in the working folder" in dl.conversion_log
     assert "Raw file name bytes" in dl.conversion_log and "Header missing" in dl.conversion_log
 

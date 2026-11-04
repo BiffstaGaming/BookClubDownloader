@@ -25,7 +25,7 @@
     <!-- Flash message (full-page save) -->
     <div id="settings-message">
       {% if message %}
-      <div class="alert alert-{{ 'success' if message_type == 'success' else 'danger' }} alert-dismissible fade show" role="alert">
+      <div class="alert alert-{{ 'success' if message_type == 'success' else 'danger' }} alert-dismissible fade show" role="alert"{% if message_type == 'success' %} data-autohide="1"{% endif %}>
         {% if message_type == "success" %}
         <i class="bi bi-check-circle-fill me-2"></i>
         {% else %}
@@ -252,46 +252,62 @@
             </div>
           </div>
 
-          <div class="row g-3 mb-3">
-            <div class="col-sm-6">
-              <label for="m4b_jobs" class="form-label bc-label">Parallel Jobs</label>
-              <input
-                type="number"
-                class="form-control bc-input"
-                id="m4b_jobs"
-                name="m4b_jobs"
-                value="{{ settings.get('m4b_jobs', '') }}"
-                placeholder="1"
-                min="1"
-                max="256"
-              />
-              <div class="form-text text-muted">
-                m4b-tool encodes one chapter per job simultaneously (<code>--jobs</code>).
-                Most audiobooks have 10&ndash;30 chapters, so setting this above that count
-                gives no extra benefit. A good starting point is <strong>half your CPU core
-                count</strong> — e.g. <code>16</code> on a 32-core machine — to leave headroom
-                for other services. Default: <code>1</code> (single-threaded).
-              </div>
+          <div class="bc-subsection mb-3">
+            <div class="bc-label mb-2"><i class="bi bi-speedometer2 me-1"></i>Encoding speed &amp; CPU</div>
+            <div class="form-text text-muted mb-3">
+              Books that are already AAC (<code>.m4b</code>/<code>.m4a</code>) are joined without re-encoding — that takes
+              seconds. MP3 books have to be encoded; these settings decide how much work that is. The log of each book
+              shows how long it took (e.g. <em>11h 32m of audio in 3m 10s</em>).
             </div>
-            <div class="col-sm-6">
-              <label for="m4b_bitrate" class="form-label bc-label">Audio Bitrate</label>
-              <select class="form-select bc-input" id="m4b_bitrate" name="m4b_bitrate">
-                {% set current_bitrate = settings.get('m4b_bitrate', '') %}
-                <option value="" {% if not current_bitrate %}selected{% endif %}>Default (128k)</option>
-                <optgroup label="Recommended for audiobooks">
-                  <option value="32k"  {% if current_bitrate == '32k'  %}selected{% endif %}>32k  — Minimal / voice-only, smallest files</option>
-                  <option value="48k"  {% if current_bitrate == '48k'  %}selected{% endif %}>48k  — Low quality, very small files</option>
-                  <option value="64k"  {% if current_bitrate == '64k'  %}selected{% endif %}>64k  — Good quality for speech (recommended)</option>
-                  <option value="96k"  {% if current_bitrate == '96k'  %}selected{% endif %}>96k  — High quality speech</option>
-                </optgroup>
-                <optgroup label="Higher quality">
-                  <option value="128k" {% if current_bitrate == '128k' %}selected{% endif %}>128k — CD quality (default)</option>
-                  <option value="192k" {% if current_bitrate == '192k' %}selected{% endif %}>192k — High fidelity</option>
-                  <option value="256k" {% if current_bitrate == '256k' %}selected{% endif %}>256k — Near lossless</option>
-                </optgroup>
-              </select>
-              <div class="form-text text-muted">
-                For speech, <code>64k</code> sounds the same as 128k and encodes roughly twice as fast.
+            <div class="row g-3">
+              <div class="col-sm-4">
+                <label for="m4b_channels" class="form-label bc-label">Channels</label>
+                <select class="form-select bc-input" id="m4b_channels" name="m4b_channels">
+                  {% set ch = settings.get('m4b_channels', '') %}
+                  <option value="1" {% if ch == '1' %}selected{% endif %}>Mono — half the work (recommended for speech)</option>
+                  <option value="2" {% if ch == '2' %}selected{% endif %}>Stereo</option>
+                </select>
+              </div>
+              <div class="col-sm-4">
+                <label for="m4b_samplerate" class="form-label bc-label">Sample rate</label>
+                <select class="form-select bc-input" id="m4b_samplerate" name="m4b_samplerate">
+                  {% set sr = settings.get('m4b_samplerate', '') %}
+                  <option value="22050" {% if sr == '22050' %}selected{% endif %}>22.05 kHz — half the work, fine for voice (recommended)</option>
+                  <option value="44100" {% if sr == '44100' %}selected{% endif %}>44.1 kHz</option>
+                </select>
+              </div>
+              <div class="col-sm-4">
+                <label for="m4b_bitrate" class="form-label bc-label">Audio Bitrate</label>
+                <select class="form-select bc-input" id="m4b_bitrate" name="m4b_bitrate">
+                  {% set current_bitrate = settings.get('m4b_bitrate', '') %}
+                  <option value="32k"  {% if current_bitrate == '32k'  %}selected{% endif %}>32k — smallest files</option>
+                  <option value="48k"  {% if current_bitrate == '48k'  %}selected{% endif %}>48k</option>
+                  <option value="64k"  {% if current_bitrate == '64k'  %}selected{% endif %}>64k — speech (recommended)</option>
+                  <option value="96k"  {% if current_bitrate == '96k'  %}selected{% endif %}>96k</option>
+                  <option value="128k" {% if current_bitrate == '128k' %}selected{% endif %}>128k</option>
+                  <option value="192k" {% if current_bitrate == '192k' %}selected{% endif %}>192k</option>
+                </select>
+              </div>
+              <div class="col-sm-6">
+                <label for="encode_max_cores" class="form-label bc-label">Use at most</label>
+                <div class="input-group">
+                  <input type="number" class="form-control bc-input" id="encode_max_cores" name="encode_max_cores"
+                         value="{{ settings.get('encode_max_cores', '') }}" min="0" max="256" placeholder="all" />
+                  <span class="input-group-text bc-input-addon">CPU cores (this machine has {{ cpu_cores }})</span>
+                </div>
+                <div class="form-text text-muted">
+                  The encoder always runs at low priority so other services stay responsive. Limiting cores keeps the
+                  CPU cooler; the book takes longer. Blank = all cores.
+                </div>
+              </div>
+              <div class="col-sm-6">
+                <label for="m4b_jobs" class="form-label bc-label">Parallel jobs</label>
+                <input type="number" class="form-control bc-input" id="m4b_jobs" name="m4b_jobs"
+                       value="{{ settings.get('m4b_jobs', '') }}" placeholder="1" min="1" max="256" />
+                <div class="form-text text-muted">
+                  Files of a multi-file book encoded at the same time — the main speed/heat trade-off. Each job keeps
+                  about one core busy, so jobs = cores you allow is the fastest; fewer is cooler. Capped at the core limit.
+                </div>
               </div>
             </div>
           </div>
@@ -431,30 +447,155 @@
       </div>
 
       <!-- Home Assistant Section -->
-      <div class="bc-card mb-4">
+      <div class="bc-card mb-4" id="home-assistant">
         <div class="bc-card-header d-flex align-items-center gap-2">
           <i class="bi bi-house-gear-fill text-accent"></i>
           <span>Home Assistant</span>
         </div>
         <div class="bc-card-body">
           <div class="mb-3">
-            <label for="ha_webhook_url" class="form-label bc-label">Webhook URL</label>
+            <label for="ha_webhook_url" class="form-label bc-label">Webhook URL (BookClub → Home Assistant)</label>
             <input type="url" class="form-control bc-input" id="ha_webhook_url" name="ha_webhook_url"
                    value="{{ settings.get('ha_webhook_url', '') }}"
                    placeholder="http://homeassistant.local:8123/api/webhook/bookclub-xxxxxxxx" />
             <div class="form-text text-muted">
-              BookClub POSTs an event here when a book is imported, a download or conversion fails, or a book needs a
-              manual match. Create an automation with a <strong>Webhook</strong> trigger in Home Assistant and paste its
-              URL. For sensors, Home Assistant can poll <code>/api/status</code> on this server
-              (<a href="/api/status" target="_blank" class="text-accent">view</a>).
+              BookClub POSTs an event here. Create an automation with a <strong>Webhook</strong> trigger in Home
+              Assistant and paste its URL. Ready-made automations are in the README.
             </div>
           </div>
-          <div class="d-flex align-items-center gap-3 flex-wrap">
+          <div class="mb-3">
+            <div class="bc-label mb-1">Send these events</div>
+            <input type="hidden" name="ha_events__present" value="1" />
+            <div class="row g-1">
+              {% for key, label in ha_event_choices %}
+              <div class="col-sm-6 col-lg-4">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="ha_events" value="{{ key }}" id="ev_{{ key }}"
+                         {% if key in ha_events_enabled %}checked{% endif %} />
+                  <label class="form-check-label small" for="ev_{{ key }}">{{ label }} <code class="bc-code small">{{ key }}</code></label>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="d-flex align-items-center gap-3 flex-wrap mb-4">
             <button type="button" class="btn bc-btn-outline" hx-post="/settings/test-ha" hx-target="#ha-test-result"
                     hx-include="[name='ha_webhook_url']">
               <i class="bi bi-send me-1"></i>Send Test Event
             </button>
             <div id="ha-test-result" class="flex-grow-1"></div>
+          </div>
+
+          <div class="mb-3">
+            <label for="public_url" class="form-label bc-label">BookClub address for links</label>
+            <input type="url" class="form-control bc-input" id="public_url" name="public_url"
+                   value="{{ settings.get('public_url', '') }}" placeholder="http://192.168.1.10:9933" />
+            <div class="form-text text-muted">
+              How your phone reaches BookClub. Notifications link here (e.g. straight to a book that needs review).
+            </div>
+          </div>
+
+          <div class="mb-2">
+            <label class="form-label bc-label">API token (Home Assistant → BookClub)</label>
+            <div class="input-group">
+              <input type="password" class="form-control bc-input font-monospace" id="api_token_view"
+                     value="{{ api_token }}" readonly />
+              <button type="button" class="btn bc-btn-outline" title="Show"
+                      onclick="var i=document.getElementById('api_token_view'); i.type = i.type === 'password' ? 'text' : 'password';">
+                <i class="bi bi-eye"></i>
+              </button>
+              <button type="button" class="btn bc-btn-outline" title="Copy"
+                      onclick="navigator.clipboard.writeText(document.getElementById('api_token_view').value); this.innerHTML='<i class=\'bi bi-check2\'></i>';">
+                <i class="bi bi-clipboard"></i>
+              </button>
+              <button type="button" class="btn bc-btn-outline" title="Make a new token (the old one stops working)"
+                      hx-post="/settings/regenerate-token" hx-target="#api_token_view" hx-swap="outerHTML"
+                      hx-confirm="Make a new API token? Home Assistant will need the new one.">
+                <i class="bi bi-arrow-repeat"></i>
+              </button>
+            </div>
+            <div class="form-text text-muted">
+              Home Assistant sends this as <code>Authorization: Bearer &lt;token&gt;</code> to
+              <code>POST /api/requests</code> — "find and download this book". The status sensor
+              (<a href="/api/status" target="_blank" class="text-accent">/api/status</a>) needs no token.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Reviewer Section -->
+      <div class="bc-card mb-4" id="ai-reviewer">
+        <div class="bc-card-header d-flex align-items-center gap-2">
+          <i class="bi bi-stars text-accent"></i>
+          <span>AI Reviewer (your Claude plan)</span>
+        </div>
+        <div class="bc-card-body">
+          <div class="form-text text-muted mb-3">
+            When the rules can't match a finished download to Audible confidently, Claude looks at the candidates
+            (title, author, narrator, running time) and picks the edition — or says none fits. It also picks the forum
+            topic for voice requests when several could be it. Its pick still has to pass the language and running-time
+            checks and the confidence threshold above. Runs through the Claude Code CLI on your Claude plan, not the
+            paid API.
+          </div>
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="ai_enabled" name="ai_enabled" value="1"
+                   {% if settings.get('ai_enabled') == '1' %}checked{% endif %} />
+            <label class="form-check-label" for="ai_enabled">Ask Claude when a match is uncertain</label>
+          </div>
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="ai_pick_requests" name="ai_pick_requests" value="1"
+                   {% if settings.get('ai_pick_requests') == '1' %}checked{% endif %} />
+            <label class="form-check-label" for="ai_pick_requests">Let Claude pick the forum topic for requests</label>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              {{ secret_input("claude_oauth_token", "Claude token", placeholder="sk-ant-oat01-…") }}
+              <div class="form-text text-muted">
+                On any computer with Claude Code, run <code>claude setup-token</code>, sign in with your Pro account and
+                paste the token here.{% if env_token %} A token from <code>CLAUDE_CODE_OAUTH_TOKEN</code> is also set
+                for the container.{% endif %}
+              </div>
+            </div>
+            <div class="col-sm-6">
+              <label for="ai_model" class="form-label bc-label">Model</label>
+              <select class="form-select bc-input" id="ai_model" name="ai_model">
+                {% for value, label in ai_models %}
+                <option value="{{ value }}" {% if settings.get('ai_model') == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-sm-6">
+              <label for="ai_daily_limit" class="form-label bc-label">At most</label>
+              <div class="input-group">
+                <input type="number" class="form-control bc-input" id="ai_daily_limit" name="ai_daily_limit"
+                       value="{{ settings.get('ai_daily_limit') }}" min="0" max="1000" />
+                <span class="input-group-text bc-input-addon">calls a day</span>
+              </div>
+            </div>
+            <div class="col-sm-6">
+              <label for="ai_pause_above_percent" class="form-label bc-label">Pause when my plan is above</label>
+              <div class="input-group">
+                <input type="number" class="form-control bc-input" id="ai_pause_above_percent" name="ai_pause_above_percent"
+                       value="{{ settings.get('ai_pause_above_percent') }}" min="1" max="100" />
+                <span class="input-group-text bc-input-addon">% used</span>
+              </div>
+              <div class="form-text text-muted">Of the 5-hour or 7-day limit, so BookClub never eats into your own Claude use.</div>
+            </div>
+          </div>
+          <div class="small text-muted mb-3">
+            Today: {{ ai_usage.calls }} call(s){% if ai_usage.failures %}, {{ ai_usage.failures }} failed{% endif %}.
+            {% if ai_plan.get('five_hour') %}
+            Plan: {{ ai_plan.five_hour.percent }}% of 5-hour, {{ (ai_plan.get('seven_day') or {}).get('percent') }}% of 7-day.
+            {% endif %}
+            {% if not claude_installed %}<span class="text-warning">The Claude Code CLI is not installed in this container.</span>{% endif %}
+          </div>
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <button type="button" class="btn bc-btn-outline" hx-post="/settings/test-claude" hx-target="#claude-test-result"
+                    hx-include="[name='claude_oauth_token'],[name='ai_model']">
+              <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+              <i class="bi bi-plug me-1"></i>Test Claude
+            </button>
+            <div id="claude-test-result" class="flex-grow-1"></div>
           </div>
         </div>
       </div>

@@ -1,8 +1,10 @@
 """Shared Jinja2 templates for every router."""
 import hashlib
+from datetime import datetime
 from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -15,4 +17,16 @@ def _asset_version() -> str:
         return "dev"
 
 
+def localtime(value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> Markup:
+    """
+    A UTC timestamp the browser shows in its own timezone (base.html formats
+    every <time class="bc-time">). The UTC text is only the fallback.
+    """
+    if not value:
+        return Markup("")
+    iso = value.isoformat(timespec="seconds") + "Z"
+    return Markup(f'<time class="bc-time" datetime="{escape(iso)}">{escape(value.strftime(fmt))} UTC</time>')
+
+
 templates.env.globals["asset_version"] = _asset_version()
+templates.env.filters["localtime"] = localtime

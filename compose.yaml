@@ -14,6 +14,12 @@ services:
       # - PUID=1000
       # - PGID=1000
       - UMASK=002
+      # Optional: the AI reviewer's Claude token (from `claude setup-token`). You can paste it in
+      # Settings → AI Reviewer instead.
+      # - CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+    # Optional hard cap on CPU for the whole container (encoding included). Settings →
+    # "Use at most N CPU cores" does the same for encoding only.
+    # cpus: "4"
     volumes:
       # Database, settings and logs
       - bookclub_data:/app/data

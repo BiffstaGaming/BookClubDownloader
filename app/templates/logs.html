@@ -27,15 +27,22 @@
         </div>
 
         <div class="d-flex align-items-center gap-2 flex-wrap">
-          <!-- Limit selector -->
-          <span class="text-muted small">Max rows:</span>
-          <select id="log-limit" class="form-select form-select-sm" style="width:auto;" onchange="setLogLimit(this.value)">
-            <option value="50" selected>50</option>
-            <option value="100">100</option>
-            <option value="250">250</option>
-            <option value="500">500</option>
-            <option value="0">All</option>
-          </select>
+          <form id="log-controls" class="d-flex align-items-center gap-2" onsubmit="return false;">
+            <input type="hidden" name="level" id="log-level" value="ALL" />
+            <input type="text" name="search" id="log-search" class="form-control form-control-sm" style="width:170px;"
+                   placeholder="Search text" oninput="logControlsChanged()" />
+            <input type="text" name="download" id="log-download" class="form-control form-control-sm" style="width:110px;"
+                   placeholder="Download #" oninput="logControlsChanged()" />
+            <!-- Limit selector -->
+            <span class="text-muted small">Max rows:</span>
+            <select id="log-limit" name="limit" class="form-select form-select-sm" style="width:auto;" onchange="logControlsChanged()">
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="250">250</option>
+              <option value="500">500</option>
+              <option value="0">All</option>
+            </select>
+          </form>
 
           <!-- Clear button -->
           <button
@@ -65,8 +72,10 @@
             </thead>
             <tbody
               id="log-rows-wrap"
-              hx-get="/logs/entries?level=ALL&limit=50"
-              hx-trigger="load, every 15s"
+              data-bc-quiet
+              hx-get="/logs/entries"
+              hx-include="#log-controls"
+              hx-trigger="every 15s, logsChanged"
               hx-swap="innerHTML"
             ></tbody>
           </table>
@@ -94,25 +103,32 @@
 .level-filter-btn.active-filter { background: var(--accent); border-color: var(--accent); color: #fff; }
 </style>
 <script>
-function _logUrl() {
-  var level = (document.querySelector('.level-filter-btn.active-filter') || {dataset:{level:'ALL'}}).dataset.level;
-  var limit = document.getElementById('log-limit').value;
-  return '/logs/entries?level=' + level + '&limit=' + limit;
+// The filters live in #log-controls, which every refresh includes, so the
+// 15-second refresh keeps them. They are also remembered between visits.
+var logTimer = null;
+function logControlsChanged() {
+  bcStore.set('logs', {
+    level: document.getElementById('log-level').value,
+    limit: document.getElementById('log-limit').value,
+    search: document.getElementById('log-search').value
+  });
+  clearTimeout(logTimer);
+  logTimer = setTimeout(function () { htmx.trigger('#log-rows-wrap', 'logsChanged'); }, 250);
 }
 function setLevelFilter(level) {
+  document.getElementById('log-level').value = level;
   document.querySelectorAll('.level-filter-btn').forEach(function(btn) {
     btn.classList.toggle('active-filter', btn.dataset.level === level);
   });
-  var url = _logUrl();
-  var tbody = document.getElementById('log-rows-wrap');
-  tbody.setAttribute('hx-get', url);
-  htmx.ajax('GET', url, { target: '#log-rows-wrap', swap: 'innerHTML' });
+  logControlsChanged();
 }
-function setLogLimit(limit) {
-  var url = _logUrl();
-  var tbody = document.getElementById('log-rows-wrap');
-  tbody.setAttribute('hx-get', url);
-  htmx.ajax('GET', url, { target: '#log-rows-wrap', swap: 'innerHTML' });
-}
+(function () {
+  var saved = bcStore.get('logs', {}), url = new URLSearchParams(location.search);
+  if (saved.limit) document.getElementById('log-limit').value = saved.limit;
+  if (saved.search) document.getElementById('log-search').value = saved.search;
+  // /logs?download=12 (from a download row) shows just that book.
+  document.getElementById('log-download').value = url.get('download') || '';
+  setLevelFilter(saved.level || 'ALL');
+})();
 </script>
 {% endblock %}

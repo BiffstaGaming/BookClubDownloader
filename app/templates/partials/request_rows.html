@@ -1,0 +1,77 @@
+{% set badges = {
+  "pending": ("bc-badge-muted", "hourglass", "Waiting"),
+  "searching": ("bc-conf-mid", "search", "Searching"),
+  "needs_choice": ("bc-conf-mid", "question-circle", "Which one?"),
+  "sent": ("bc-badge-success", "send-check", "Downloading"),
+  "duplicate": ("bc-conf-mid", "files", "Already have it?"),
+  "not_found": ("bc-badge-danger", "x-circle", "Not found"),
+  "failed": ("bc-badge-danger", "exclamation-triangle", "Failed"),
+  "cancelled": ("bc-badge-muted", "slash-circle", "Cancelled"),
+} %}
+{% if notice %}<div class="p-3 pb-0">{{ notice | safe }}</div>{% endif %}
+{% if requests %}
+<div class="table-responsive">
+  <table class="table bc-table mb-0">
+    <tbody>
+      {% for r in requests %}
+      {% set cls, icon, label = badges.get(r.status, ("bc-badge-muted", "dot", r.status)) %}
+      <tr>
+        <td style="width:40%;">
+          <div class="fw-semibold text-primary-light">{{ r.query }}</div>
+          <div class="text-muted small">
+            #{{ r.id }}{% if r.requested_by %} · asked by {{ r.requested_by }}{% endif %} · {{ r.created_at | localtime }}
+          </div>
+        </td>
+        <td>
+          <span class="badge {{ cls }}"><i class="bi bi-{{ icon }} me-1"></i>{{ label }}</span>
+          {% if r.message %}<div class="text-muted small mt-1 bc-reason">{{ r.message }}</div>{% endif %}
+          {% if r.status == "needs_choice" %}
+          <div class="d-flex flex-column gap-1 mt-2">
+            {% for o in r.parsed_options %}
+            <button class="btn btn-sm bc-btn-outline text-start"
+                    hx-post="/downloads/requests/{{ r.id }}/choose" hx-vals='{"option": {{ o.option }}}'
+                    hx-target="#request-rows" hx-swap="innerHTML">
+              <span class="badge bc-badge-muted me-2">{{ o.option }}</span>{{ o.title }}
+            </button>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </td>
+        <td class="text-end text-nowrap" style="width:1%;">
+          {% if r.status == "sent" and r.download_id %}
+          <a class="btn btn-sm bc-btn-outline" href="/downloads?highlight={{ r.download_id }}" title="Show the download">
+            <i class="bi bi-arrow-down-circle"></i>
+          </a>
+          {% endif %}
+          {% if r.status == "duplicate" %}
+          <button class="btn btn-sm bc-btn-sm-primary" hx-post="/downloads/requests/{{ r.id }}/choose"
+                  hx-vals='{"force": "1"}' hx-target="#request-rows" hx-swap="innerHTML"
+                  title="Download it anyway">
+            <i class="bi bi-send me-1"></i>Get anyway
+          </button>
+          {% endif %}
+          {% if r.status in ("not_found", "failed") %}
+          <button class="btn btn-sm bc-btn-sm-primary" hx-post="/downloads/requests/{{ r.id }}/retry"
+                  hx-target="#request-rows" hx-swap="innerHTML" title="Try again">
+            <i class="bi bi-arrow-repeat"></i>
+          </button>
+          {% endif %}
+          {% if r.status in ("pending", "searching", "needs_choice", "duplicate", "not_found", "failed", "cancelled", "sent") %}
+          <button class="btn btn-sm" style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
+                  hx-delete="/downloads/requests/{{ r.id }}" hx-target="#request-rows" hx-swap="innerHTML"
+                  title="Remove from this list (a download already sent keeps going)">
+            <i class="bi bi-x-lg"></i>
+          </button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="text-muted small p-3">
+  No requests yet. Type a book above, or ask Home Assistant —
+  see <a href="/settings#home-assistant" class="text-accent">Settings → Home Assistant</a>.
+</div>
+{% endif %}

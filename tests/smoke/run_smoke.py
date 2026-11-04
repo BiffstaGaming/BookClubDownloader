@@ -137,6 +137,30 @@ if os.path.isfile(expected):
         check(tags2.get("title") == "Second Book", f"tone re-tagged title ({tags2.get('title')})")
         check(tags2.get("artist") == "Other Author", f"tone re-tagged artist ({tags2.get('artist')})")
 
+# ── 2b. several AAC parts → joined without re-encoding, under the core limit ──
+aac_src = f"{DOWNLOADS}/AAC Parts"
+os.makedirs(aac_src)
+for i in range(1, 4):
+    sh("ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency={300 + i * 100}:duration=6",
+       "-ac", "1", "-ar", "22050", "-c:a", "aac", "-b:a", "32k", "-metadata", f"title=Part {i}",
+       f"{aac_src}/{i:02d} - Part {i}.m4a")
+db = SessionLocal()
+set_setting(db, "encode_max_cores", "1")
+db.close()
+dl_aac = convert({"title": "Joined Book", "author": "Test Author"}, aac_src)
+expected_aac = f"{LIBRARY}/Test Author/Joined Book/Joined Book.m4b"
+check(dl_aac.m4b_status == "converted", f"AAC parts joined (status={dl_aac.m4b_status}, error={dl_aac.error_message})")
+check(dl_aac.parsed_metadata.get("convert_mode") == "joined without re-encoding",
+      f"joined without re-encoding ({dl_aac.parsed_metadata.get('convert_mode')})")
+if dl_aac.m4b_status != "converted":
+    print(dl_aac.conversion_log)
+if os.path.isfile(expected_aac):
+    aac_tags = tone_dump(expected_aac).get("meta", {})
+    check(len(aac_tags.get("chapters") or []) == 3, f"joined book has 3 chapters ({len(aac_tags.get('chapters') or [])})")
+    seconds = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                    expected_aac], capture_output=True, text=True).stdout.strip() or 0)
+    check(17 <= seconds <= 19, f"joined book is ~18s long ({seconds:.1f}s)")
+
 # ── 3. refusing to overwrite ─────────────────────────────────────────────────
 dup_src = f"{DOWNLOADS}/Duplicate"
 make_book(dup_src, 1)

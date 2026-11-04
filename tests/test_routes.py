@@ -110,7 +110,7 @@ def test_reset_conversion_views(client, db):
     dl = Download(status="downloaded", m4b_status="queued")
     db.add(dl)
     db.commit()
-    assert "<tr>" in client.post(f"/downloads/{dl.id}/reset-conversion").text
+    assert f'<tr data-dl-id="{dl.id}">' in client.post(f"/downloads/{dl.id}/reset-conversion").text
     assert "<form" in client.post(f"/downloads/{dl.id}/reset-conversion?view=form").text
 
 

@@ -17,22 +17,32 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 from datetime import datetime, timedelta
 
 from sqlalchemy import or_
 
 from app.database import SessionLocal
 from app.log_handler import log_to_db
-from app.models import Download, LogEntry
-from app.services import library, notify
+from app.models import BookRequest, Download, LogEntry
+from app.services import ai, audio, book_requests, library, notify
 from app.services.abs import AbsClient
-from app.services.matching import normalize, parse_nzb_name, rank_candidates
+from app.services.matching import looks_like_series, normalize, parse_nzb_name, rank_candidates
 from app.services.nzbget import NzbgetClient
 from app.settings_store import get_bool, get_int, get_setting, set_setting
 
 logger = logging.getLogger(__name__)
 
 MISSING_POLLS_BEFORE_FAILURE = 6
+
+# When Audible can't be searched (Audiobookshelf restarting, network blip), try
+# again after these many minutes before asking a person.
+AUTO_RETRY_MINUTES = (2, 10, 30, 60, 180)
+
+# Audiobookshelf import: quick checks first, then slower ones — a full library
+# scan on a big library can take many minutes.
+ABS_POLL_SCHEDULE = [10] * 12 + [30] * 36   # about 20 minutes in all
+ABS_SCAN_AT = (3, 20)                       # attempts at which to ask for a full scan
 
 # m4b-tool reads these from the input folder; anything else (nfo, jpg, txt) is ignored.
 MERGE_EXTENSIONS = "mp3,m4a,m4b,mp4,aac,flac,ogg,oga,opus,wav,wma"
@@ -122,10 +132,19 @@ class Pipeline:
         db = SessionLocal()
         try:
             pending_imports = [d.id for d in db.query(Download).filter(Download.abs_status == "pending").all()]
+            # A restart in the middle of a request: start it again from the top.
+            open_requests = db.query(BookRequest).filter(
+                BookRequest.status.in_(book_requests.ACTIVE_STATUSES)).all()
+            for req in open_requests:
+                req.status = "pending"
+            db.commit()
+            open_request_ids = [r.id for r in open_requests]
         finally:
             db.close()
         for dl_id in pending_imports:
             self.spawn(self.abs_import(dl_id))
+        for req_id in open_request_ids:
+            self.spawn(self.process_request(req_id))
         logger.info("Pipeline started (poller + conversion worker)")
 
     async def stop(self):
@@ -224,17 +243,20 @@ class Pipeline:
                     self._apply_nzbget_state(db, pending, history, queue, completed, failed)
                     db.commit()
 
-            # Restart-safe: anything finished but never auto-matched gets matched now.
+            # Restart-safe: anything finished but never auto-matched gets matched now,
+            # and a match that hit a temporary error is retried when it is due.
+            now = datetime.utcnow().isoformat()
             for dl in db.query(Download).filter(Download.status == "downloaded", Download.m4b_status.is_(None)).all():
-                if not dl.parsed_metadata.get("auto_processed"):
+                meta = dl.parsed_metadata
+                if not meta.get("auto_processed") and (meta.get("auto_next_try") or "") <= now:
                     to_match.append(dl.id)
         finally:
             db.close()
 
-        for dl_id, title in completed:
-            await notify.send_event("download_completed", title=title, download_id=dl_id)
-        for dl_id, title, message in failed:
-            await notify.send_event("download_failed", title=title, download_id=dl_id, message=message)
+        for dl_id, _title in completed:
+            await notify.send_download_event("download_completed", dl_id)
+        for dl_id, _title, message in failed:
+            await notify.send_download_event("download_failed", dl_id, message=message)
         for dl_id in to_match:
             await self.auto_process(dl_id)
 
@@ -302,7 +324,8 @@ class Pipeline:
     async def auto_process(self, download_id: int):
         """
         Match a finished download against Audible (through ABS) and queue the
-        conversion when the match is confident enough.
+        conversion when the match is confident enough. When the rules aren't sure
+        and the AI reviewer is on, Claude gets a look before a person is asked.
         """
         db = SessionLocal()
         try:
@@ -312,96 +335,181 @@ class Pipeline:
             meta = dl.parsed_metadata
             if meta.get("auto_processed"):
                 return
-            meta["auto_processed"] = True
-            dl.set_metadata(meta)
-            db.commit()
-
-            title_hint = dl.display_title
-            if not (get_setting(db, "abs_url") and get_setting(db, "abs_token")):
-                log_to_db("INFO", "auto", f"#{download_id}: Audiobookshelf not configured — convert manually", download_id=download_id)
-                await notify.send_event("needs_review", title=title_hint, download_id=download_id,
-                                        message="Audiobookshelf is not configured, so the book could not be matched automatically")
-                return
-
-            nzb_name = dl.post_title or dl.nzb_name or ""
-            nzb_title, nzb_author = parse_nzb_name(nzb_name)
-            forum_author = meta.get("author", "")
-            if forum_author and re.search(r'\d$', forum_author.strip()):
-                forum_author = ""  # looks like "Series Name 1", not a real author name
-            query_title = nzb_title or meta.get("title", "")
-            query_author = nzb_author or forum_author
-            provider = get_setting(db, "audible_provider")
-            if not query_title:
-                log_to_db("WARNING", "auto", f"#{download_id}: could not extract a title from '{nzb_name}'", download_id=download_id)
-                await notify.send_event("needs_review", title=title_hint, download_id=download_id,
-                                        message="Could not work out the book title")
-                return
-
-            log_to_db("INFO", "auto", f"#{download_id}: searching {provider} — title='{query_title}' author='{query_author}'",
-                      download_id=download_id)
-            client = AbsClient(get_setting(db, "abs_url"), get_setting(db, "abs_token"))
-            try:
-                results = await asyncio.to_thread(client.search_books, query_title.strip(), query_author.strip(), provider)
-            except Exception as exc:
-                log_to_db("ERROR", "auto", f"#{download_id}: Audible search failed: {exc}", download_id=download_id)
-                await notify.send_event("needs_review", title=title_hint, download_id=download_id,
-                                        message=f"Audible search failed: {exc}")
-                return
-
-            preferred_language = get_setting(db, "preferred_language")
-            candidates = rank_candidates(results, query_title, query_author,
-                                         preferred_language=preferred_language)
-            if not candidates:
-                meta["match_confidence"] = 0
-                dl.set_metadata(meta)
-                db.commit()
-                log_to_db("WARNING", "auto", f"#{download_id}: no Audible results", download_id=download_id)
-                await notify.send_event("needs_review", title=title_hint, download_id=download_id,
-                                        message="No Audible results — pick the details manually")
-                return
-
-            best = candidates[0]
-            apply_candidate(meta, best)
-            dl.set_metadata(meta)
-            db.commit()
-            confidence = best["confidence"]
-            log_to_db("INFO", "auto",
-                      f"#{download_id}: best match '{best['title']}' by '{best['author']}' "
-                      f"({best.get('language') or 'language unknown'}) — {confidence}%",
-                      download_id=download_id)
-            if best.get("language_mismatch"):
-                log_to_db("WARNING", "auto",
-                          f"#{download_id}: the best match is not in {preferred_language} — "
-                          "not converting automatically", download_id=download_id)
-
-            threshold = get_int(db, "auto_match_threshold", 90)
-            if not get_bool(db, "auto_convert"):
-                await notify.send_event("needs_review", title=meta.get("title"), author=meta.get("author"),
-                                        download_id=download_id, message="Auto-convert is off — review and convert")
-                return
-            if confidence < threshold:
-                log_to_db("INFO", "auto", f"#{download_id}: {confidence}% is below {threshold}% — manual review needed",
-                          download_id=download_id)
-                await notify.send_event("needs_review", title=meta.get("title"), author=meta.get("author"),
-                                        download_id=download_id,
-                                        message=f"Best Audible match is only {confidence}% — pick the right one")
-                return
-
-            problem = check_input_folder(dl.download_path)
-            if problem:
-                log_to_db("WARNING", "auto", f"#{download_id}: {problem} — not converting", download_id=download_id)
-                await notify.send_event("needs_review", title=meta.get("title"), download_id=download_id, message=problem)
-                return
-
-            meta["input_path"] = dl.download_path
-            dl.set_metadata(meta)
-            enqueue(dl)
-            db.commit()
-            log_to_db("INFO", "auto", f"#{download_id}: queued for conversion ({confidence}% ≥ {threshold}%)",
-                      download_id=download_id)
-            self.queue_changed()
+            await self._auto_match(db, dl, meta)
         finally:
             db.close()
+
+    async def _needs_review(self, db, dl: Download, meta: dict, reason: str, retry: bool = False):
+        """
+        Stop and ask a person — or, for a temporary problem, try again later.
+        The reason is kept on the row so the Downloads page can show it.
+        """
+        attempts = int(meta.get("auto_attempts") or 0)
+        if retry and attempts < len(AUTO_RETRY_MINUTES):
+            wait = AUTO_RETRY_MINUTES[attempts]
+            meta["auto_attempts"] = attempts + 1
+            meta["auto_next_try"] = (datetime.utcnow() + timedelta(minutes=wait)).isoformat()
+            meta["review_reason"] = f"{reason} — trying again in {wait} min"
+            dl.set_metadata(meta)
+            db.commit()
+            log_to_db("WARNING", "auto", f"#{dl.id}: {reason} — will retry in {wait} min", download_id=dl.id)
+            return
+        meta["auto_processed"] = True
+        meta["review_reason"] = reason
+        meta.pop("auto_next_try", None)
+        dl.set_metadata(meta)
+        db.commit()
+        log_to_db("INFO", "auto", f"#{dl.id}: needs review — {reason}", download_id=dl.id)
+        await notify.send_download_event("needs_review", dl.id, message=reason)
+
+    async def _auto_match(self, db, dl: Download, meta: dict):
+        download_id = dl.id
+        # Keep what the forum post said; an Audible match overwrites title/author/narrator.
+        for key in ("title", "author", "narrator"):
+            meta.setdefault(f"forum_{key}", meta.get(key, ""))
+        if not (get_setting(db, "abs_url") and get_setting(db, "abs_token")):
+            await self._needs_review(db, dl, meta, "Audiobookshelf is not configured, so the book could not be matched automatically")
+            return
+
+        problem = await asyncio.to_thread(check_input_folder, dl.download_path)
+        if problem:
+            await self._needs_review(db, dl, meta, problem)
+            return
+
+        # How long the downloaded audio is — the best check that an edition is the right one.
+        files = await asyncio.to_thread(library.find_audio_files, dl.download_path)
+        probes = await asyncio.to_thread(audio.probe_all, files)
+        audio_minutes = audio.total_minutes(probes)
+        if audio_minutes:
+            meta["audio_minutes"] = audio_minutes
+
+        nzb_name = dl.post_title or dl.nzb_name or ""
+        nzb_title, nzb_author = parse_nzb_name(nzb_name)
+        forum_title, forum_author = meta.get("forum_title", ""), meta.get("forum_author", "")
+        # "Rob Jones - Hunter Files 06 - Title" puts the series where the author usually is.
+        authors = [a for a in (nzb_author, forum_author) if a and not looks_like_series(a)]
+        query_author = authors[0] if authors else ""
+        titles = list(dict.fromkeys(t.strip() for t in (nzb_title, forum_title) if t and t.strip()))
+        if not titles:
+            await self._needs_review(db, dl, meta, f"Could not work out the book title from '{nzb_name}'")
+            return
+        query_title = titles[0]
+
+        provider = get_setting(db, "audible_provider")
+        preferred_language = get_setting(db, "preferred_language")
+        threshold = get_int(db, "auto_match_threshold", 90)
+        client = AbsClient(get_setting(db, "abs_url"), get_setting(db, "abs_token"))
+
+        # Search a few ways, stopping as soon as one gives a confident match.
+        searches = [(query_title, query_author)]
+        searches += [(t, query_author) for t in titles[1:]]
+        if query_author:
+            searches.append((query_title, ""))
+        results, candidates = [], []
+        for title, author in dict.fromkeys(searches):
+            log_to_db("INFO", "auto", f"#{download_id}: searching {provider} — title='{title}' author='{author}'",
+                      download_id=download_id)
+            try:
+                found = await asyncio.to_thread(client.search_books, title.strip(), author.strip(), provider)
+            except Exception as exc:
+                await self._needs_review(db, dl, meta, f"Audible search failed: {exc}", retry=True)
+                return
+            results += found
+            candidates = rank_candidates(results, query_title, query_author, preferred_language=preferred_language,
+                                         audio_minutes=audio_minutes)
+            if candidates and candidates[0]["confidence"] >= threshold and not candidates[0]["language_mismatch"]:
+                break
+
+        if not candidates:
+            meta["match_confidence"] = 0
+            await self._needs_review(db, dl, meta, "No Audible results — pick the details manually")
+            return
+
+        best = candidates[0]
+        log_to_db("INFO", "auto",
+                  f"#{download_id}: best match '{best['title']}' by '{best['author']}' "
+                  f"({best.get('language') or 'language unknown'}"
+                  f"{', length matches' if best.get('duration_match') else ''}"
+                  f"{', LENGTH DIFFERS' if best.get('duration_mismatch') else ''}) — {best['confidence']}%",
+                  download_id=download_id)
+
+        chosen, method, why_not = None, "", ""
+        if best["confidence"] >= threshold and not best["language_mismatch"]:
+            chosen, method = best, f"rules ({best['confidence']}%)"
+        else:
+            if best.get("language_mismatch"):
+                why_not = f"the best match is not in {preferred_language}"
+            elif best.get("duration_mismatch"):
+                why_not = f"the best match ({best['confidence']}%) is a different length — maybe abridged or another edition"
+            else:
+                why_not = f"the best Audible match is only {best['confidence']}%"
+            chosen, method, ai_note = await self._ask_claude(db, dl, meta, candidates, threshold, preferred_language,
+                                                             audio_minutes, len(files))
+            if ai_note:
+                why_not = f"{why_not}; {ai_note}"
+
+        if not chosen:
+            apply_candidate(meta, best)  # pre-fill the form with the best guess
+            await self._needs_review(db, dl, meta, why_not[0].upper() + why_not[1:])
+            return
+
+        apply_candidate(meta, chosen)
+        meta["match_method"] = method
+        if not get_bool(db, "auto_convert"):
+            await self._needs_review(db, dl, meta, f"Matched by {method}, but auto-convert is off — review and convert")
+            return
+        meta["auto_processed"] = True
+        meta.pop("review_reason", None)
+        meta.pop("auto_next_try", None)
+        meta["input_path"] = dl.download_path
+        dl.set_metadata(meta)
+        enqueue(dl)
+        db.commit()
+        log_to_db("INFO", "auto", f"#{download_id}: queued for conversion — matched by {method}", download_id=download_id)
+        self.queue_changed()
+
+    async def _ask_claude(self, db, dl: Download, meta: dict, candidates: list, threshold: int,
+                          language: str, audio_minutes: float, file_count: int) -> tuple[dict | None, str, str]:
+        """(chosen candidate or None, how it was chosen, a note for the review reason)."""
+        reason = ai.unavailable_reason(db)
+        if reason:
+            if get_bool(db, "ai_enabled"):
+                log_to_db("INFO", "ai", f"#{dl.id}: not asking Claude — {reason}", download_id=dl.id)
+                return None, "", f"Claude not asked: {reason}"
+            return None, "", ""
+        files = await asyncio.to_thread(library.find_audio_files, dl.download_path)
+        download = {
+            "forum topic": dl.post_title or "",
+            "nzb name": dl.nzb_name or "",
+            "title from the post": meta.get("forum_title") or "",
+            "author from the post": meta.get("forum_author") or "",
+            "narrator from the post": meta.get("forum_narrator") or "",
+            "audio length": f"{int(audio_minutes) // 60}h {int(audio_minutes) % 60:02d}m" if audio_minutes else "unknown",
+            "audio files": f"{file_count}: " + ", ".join(os.path.basename(f) for f in files[:6])
+                           + (" …" if len(files) > 6 else ""),
+        }
+        shortlist = candidates[:8]
+        try:
+            verdict = await asyncio.to_thread(ai.review_match, db, download, shortlist, language)
+        except ai.ClaudeError as exc:
+            log_to_db("WARNING", "ai", f"#{dl.id}: Claude review failed — {exc}", download_id=dl.id)
+            return None, "", f"Claude review failed: {exc}"
+        meta["ai_review"] = verdict
+        if verdict["index"] is None:
+            log_to_db("INFO", "ai", f"#{dl.id}: Claude found no clear match — {verdict['reason']}", download_id=dl.id)
+            return None, "", f"Claude: {verdict['reason'] or 'no clear match'}"
+        pick = shortlist[verdict["index"]]
+        label = f"'{pick['title']}' by {pick['author']}"
+        log_to_db("INFO", "ai", f"#{dl.id}: Claude picked {label} ({verdict['confidence']}%) — {verdict['reason']}",
+                  download_id=dl.id)
+        # Claude's choice still has to pass the same checks as any other match.
+        if pick.get("language_mismatch"):
+            return None, "", f"Claude picked {label}, but it is not in {language}"
+        if pick.get("duration_mismatch"):
+            return None, "", f"Claude picked {label}, but its length differs from the download"
+        if verdict["confidence"] < threshold:
+            return None, "", f"Claude suggests {label} but is only {verdict['confidence']}% sure ({verdict['reason']})"
+        return pick, f"Claude ({verdict['confidence']}%: {verdict['reason']})", ""
 
     # ── conversion worker ─────────────────────────────────────────────────────
     async def _worker_loop(self):
@@ -455,7 +563,8 @@ class Pipeline:
         finally:
             db.close()
         log_to_db("ERROR", "conversion", f"#{dl_id}: {message}", download_id=dl_id)
-        await notify.send_event("conversion_failed", title=title, download_id=dl_id, message=message)
+        if title:
+            await notify.send_download_event("conversion_failed", dl_id, message=message)
 
     def cancel(self, dl_id: int) -> bool:
         """
@@ -509,8 +618,17 @@ class Pipeline:
             nzbget_folder = dl.download_path or ""
             output_root = get_setting(db, "m4b_output_path")
             move_template = get_setting(db, "m4b_move_template")
-            jobs = get_setting(db, "m4b_jobs")
-            bitrate = get_setting(db, "m4b_bitrate")
+            max_cores = audio.effective_cores(get_setting(db, "encode_max_cores"))
+            encoding = {
+                "jobs": get_setting(db, "m4b_jobs"),
+                "bitrate": get_setting(db, "m4b_bitrate"),
+                "channels": get_setting(db, "m4b_channels"),
+                "samplerate": get_setting(db, "m4b_samplerate"),
+                "threads": str(max_cores) if max_cores else "",
+            }
+            if max_cores and encoding["jobs"].isdigit():
+                # Parallel jobs beyond the allowed cores only fight over them.
+                encoding["jobs"] = str(min(int(encoding["jobs"]), max_cores))
             delete_source = get_bool(db, "delete_source")
             roots = download_roots(db)
             self.cancelled.discard(dl_id)
@@ -548,20 +666,35 @@ class Pipeline:
                 if await asyncio.to_thread(library.download_cover, meta["cover_url"], downloaded):
                     cover = downloaded
 
-            audio = await asyncio.to_thread(library.find_audio_files, input_path)
-            log_to_db("INFO", "conversion", f"#{dl_id}: converting {len(audio)} audio file(s) from {input_path}",
-                      download_id=dl_id)
+            audio_files = await asyncio.to_thread(library.find_audio_files, input_path)
+            probes = await asyncio.to_thread(audio.probe_all, audio_files)
+            audio_seconds = sum(p.get("seconds") or 0 for p in probes)
             if await self._stop_if_cancelled(dl_id):
                 return
-            if len(audio) == 1 and audio[0].lower().endswith((".m4b", ".m4a", ".mp4")):
+            started = time.monotonic()
+            if len(audio_files) == 1 and audio_files[0].lower().endswith((".m4b", ".m4a", ".mp4")):
                 # Already a single AAC file — copy it (the source stays intact until the end) and tag it.
-                await asyncio.to_thread(shutil.copy2, audio[0], work_file)
+                mode = "copied and tagged"
+                log_to_db("INFO", "conversion", f"#{dl_id}: single AAC file — copying, no encoding needed",
+                          download_id=dl_id)
+                await asyncio.to_thread(shutil.copy2, audio_files[0], work_file)
                 if await self._stop_if_cancelled(dl_id):
                     return
-                returncode, log = await self._run(dl_id, tone_command(work_file, meta, cover))
+                returncode, log = await self._run(dl_id, audio.gentle(tone_command(work_file, meta, cover), max_cores))
             else:
-                returncode, log = await self._run(
-                    dl_id, merge_command(input_path, work_file, meta, cover, jobs, bitrate))
+                join_only = audio.can_join_without_encoding(audio_files, probes)
+                mode = "joined without re-encoding" if join_only else "encoded"
+                log_to_db("INFO", "conversion",
+                          f"#{dl_id}: {len(audio_files)} audio file(s) from {input_path} — "
+                          + ("all AAC, joining without re-encoding" if join_only else
+                             f"encoding to AAC {encoding['bitrate'] or 'default'} "
+                             f"{'mono' if encoding['channels'] == '1' else (encoding['channels'] + ' ch') if encoding['channels'] else ''} "
+                             f"{encoding['samplerate'] + ' Hz' if encoding['samplerate'] else ''}"
+                             f"{f', {max_cores} core(s)' if max_cores else ''}"),
+                          download_id=dl_id)
+                cmd = merge_command(input_path, work_file, meta, cover, no_conversion=join_only, **encoding)
+                returncode, log = await self._run(dl_id, audio.gentle(cmd, max_cores))
+            elapsed = time.monotonic() - started
             log_to_db("DEBUG", "conversion", f"#{dl_id} tool output:\n{log[-20000:]}", download_id=dl_id)
 
             if await self._stop_if_cancelled(dl_id):
@@ -617,21 +750,29 @@ class Pipeline:
                 except Exception as exc:
                     log_to_db("WARNING", "conversion", f"#{dl_id}: could not delete {input_path}: {exc}", download_id=dl_id)
 
+            speed = audio.describe_speed(audio_seconds, elapsed)
             db = SessionLocal()
             try:
                 dl = db.query(Download).filter(Download.id == dl_id).first()
+                if dl is None:
+                    # Removed from the history while it was being filed; the book itself is in place.
+                    log_to_db("INFO", "conversion", f"#{dl_id}: finished after the row was deleted — book at {final_path}")
+                    return
                 dl.m4b_status = "converted"
                 dl.m4b_progress = 100
                 dl.m4b_path = final_path
                 dl.conversion_log = log[-4000:]
                 dl.abs_status = "pending" if abs_configured(db) else "skipped"
+                saved = dl.parsed_metadata
+                saved["convert_mode"] = mode
+                saved["convert_seconds"] = round(elapsed)
+                dl.set_metadata(saved)
                 run_import = dl.abs_status == "pending"
                 db.commit()
             finally:
                 db.close()
-            log_to_db("INFO", "conversion", f"#{dl_id}: M4B ready at {final_path}", download_id=dl_id)
-            await notify.send_event("book_converted", title=meta.get("title"), author=meta.get("author"),
-                                    download_id=dl_id, message=final_path)
+            log_to_db("INFO", "conversion", f"#{dl_id}: M4B ready at {final_path} — {mode}, {speed}", download_id=dl_id)
+            await notify.send_download_event("book_converted", dl_id, message=final_path)
             if run_import:
                 self.spawn(self.abs_import(dl_id))
         finally:
@@ -685,7 +826,8 @@ class Pipeline:
             db.close()
 
     # ── Audiobookshelf import ────────────────────────────────────────────────
-    async def abs_import(self, dl_id: int, poll_seconds: int = 10, attempts: int = 24):
+    async def abs_import(self, dl_id: int, poll_seconds: int | None = None, attempts: int | None = None):
+        schedule = [poll_seconds] * attempts if poll_seconds is not None and attempts else ABS_POLL_SCHEDULE
         db = SessionLocal()
         try:
             dl = db.query(Download).filter(Download.id == dl_id).first()
@@ -717,17 +859,17 @@ class Pipeline:
             log_to_db("DEBUG", "abs", f"#{dl_id}: watcher update not accepted ({exc}) — will run a library scan",
                       download_id=dl_id)
 
-        item, scanned = None, False
-        for attempt in range(attempts):
-            await asyncio.sleep(poll_seconds)
-            if attempt == 3 and not scanned:
-                # The watcher may be disabled for this library; fall back to a full scan once.
+        item = None
+        for attempt, wait in enumerate(schedule):
+            await asyncio.sleep(wait)
+            if attempt in ABS_SCAN_AT:
+                # The watcher may be disabled for this library; fall back to a full scan
+                # (and once more later, in case the first one was busy with something else).
                 try:
                     await asyncio.to_thread(client.scan_library, library_id)
                     log_to_db("INFO", "abs", f"#{dl_id}: library scan triggered", download_id=dl_id)
                 except Exception as exc:
                     log_to_db("WARNING", "abs", f"#{dl_id}: library scan failed: {exc}", download_id=dl_id)
-                scanned = True
             try:
                 item = await asyncio.to_thread(find_library_item, client, library_id, title, meta.get("asin", ""),
                                                abs_dir, local_dir)
@@ -747,10 +889,12 @@ class Pipeline:
                                     f"the ABS library and the BookClub → ABS path mapping in Settings.")
                 db.commit()
                 log_to_db("WARNING", "abs", f"#{dl_id}: {dl.error_message}", download_id=dl_id)
-                await notify.send_event("abs_import_failed", title=title, download_id=dl_id, message=dl.error_message)
+                await notify.send_download_event("abs_import_failed", dl_id, message=dl.error_message)
                 return
             dl.abs_item_id = item["id"]
             dl.abs_status = "imported"
+            dl.imported_at = datetime.utcnow()
+            dl.error_message = None
             db.commit()
         finally:
             db.close()
@@ -765,8 +909,16 @@ class Pipeline:
                 log_to_db("INFO", "abs", f"#{dl_id}: Quick Match done (updated={result.get('updated')})", download_id=dl_id)
         except Exception as exc:
             log_to_db("WARNING", "abs", f"#{dl_id}: Quick Match failed: {exc}", download_id=dl_id)
-        await notify.send_event("book_imported", title=title, author=meta.get("author"), download_id=dl_id,
-                                url=client.item_web_url(item["id"]))
+        item_url = client.item_web_url(item["id"])
+        await notify.send_download_event("book_imported", dl_id, url=item_url, abs_url=item_url)
+
+    # ── Home Assistant / voice requests ──────────────────────────────────────
+    async def process_request(self, request_id: int):
+        """Run a 'find and download this book' request (network-bound, so in a thread)."""
+        outcome = await asyncio.to_thread(book_requests.run_request, request_id)
+        if outcome:
+            event, fields = outcome
+            await notify.send_event(event, **fields)
 
 
 def _path_tail(path: str, depth: int) -> str:
@@ -882,13 +1034,30 @@ def apply_candidate(meta: dict, candidate: dict):
     meta["language_mismatch"] = bool(candidate.get("language_mismatch"))
 
 
-def merge_command(input_path: str, output_file: str, meta: dict, cover: str, jobs: str, bitrate: str) -> list[str]:
+def merge_command(input_path: str, output_file: str, meta: dict, cover: str, jobs: str = "", bitrate: str = "",
+                  channels: str = "", samplerate: str = "", threads: str = "", no_conversion: bool = False) -> list[str]:
+    """
+    m4b-tool merge. `no_conversion` joins AAC parts as they are (seconds, not
+    minutes); otherwise the audio is encoded with the bitrate / channels /
+    sample rate from Settings.
+    """
     cmd = [
         "m4b-tool", "merge", input_path,
         f"--output-file={output_file}",
         f"--include-extensions={MERGE_EXTENSIONS}",
         "--no-interaction",
     ]
+    if no_conversion:
+        cmd.append("--no-conversion")
+    else:
+        if bitrate:
+            cmd.append(f"--audio-bitrate={bitrate}")
+        if channels:
+            cmd.append(f"--audio-channels={channels}")
+        if samplerate:
+            cmd.append(f"--audio-samplerate={samplerate}")
+    if threads:
+        cmd.append(f"--ffmpeg-threads={threads}")
     if meta.get("title"):
         cmd += [f"--name={meta['title']}", f"--album={meta['title']}"]
     if meta.get("author"):
@@ -909,8 +1078,6 @@ def merge_command(input_path: str, output_file: str, meta: dict, cover: str, job
         cmd.append(f"--cover={cover}")
     if jobs:
         cmd.append(f"--jobs={jobs}")
-    if bitrate:
-        cmd.append(f"--audio-bitrate={bitrate}")
     return cmd
 
 

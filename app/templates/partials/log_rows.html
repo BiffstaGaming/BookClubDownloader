@@ -2,7 +2,7 @@
 {% for entry in entries %}
 <tr>
   <td class="text-muted" style="white-space:nowrap;font-size:0.75rem;">
-    {{ entry.created_at.strftime("%Y-%m-%d %H:%M:%S") if entry.created_at else "—" }}
+    {{ entry.created_at | localtime("%Y-%m-%d %H:%M:%S") if entry.created_at else "—" }}
   </td>
   <td>
     {% if entry.level == "ERROR" %}
@@ -34,7 +34,7 @@
   </td>
   <td class="text-muted" style="font-size:0.75rem;">
     {% if entry.download_id %}
-    <code class="bc-code">#{{ entry.download_id }}</code>
+    <a href="/downloads?highlight={{ entry.download_id }}" class="text-decoration-none" title="Show this download"><code class="bc-code">#{{ entry.download_id }}</code></a>
     {% else %}—{% endif %}
   </td>
 </tr>

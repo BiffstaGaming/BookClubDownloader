@@ -14,7 +14,7 @@
 {% if downloads %}
 {% for dl in downloads %}
 {% set meta = dl.parsed_metadata %}
-<tr>
+<tr data-dl-id="{{ dl.id }}">
   <td>
     <div class="fw-semibold text-primary-light">{{ meta.get('title') or dl.post_title or dl.nzb_name or "—" }}</div>
     {% if meta.get('author') %}
@@ -33,6 +33,18 @@
     {% endif %}
     {% if dl.error_message %}
     <div class="small mt-1 text-warning"><i class="bi bi-exclamation-circle me-1"></i>{{ dl.error_message }}</div>
+    {% endif %}
+    {% if dl.status == "downloaded" and dl.m4b_status is none and meta.get('review_reason') %}
+    <div class="bc-reason mt-1 text-warning"><i class="bi bi-person-check me-1"></i>{{ meta.get('review_reason') }}</div>
+    {% endif %}
+    {% if meta.get('match_method') %}
+    <div class="bc-reason mt-1 text-muted"><i class="bi bi-{{ 'stars' if 'Claude' in meta.get('match_method') else 'check2' }} me-1"></i>Matched by {{ meta.get('match_method') }}</div>
+    {% endif %}
+    {% if meta.get('convert_mode') and dl.m4b_status == "converted" %}
+    <div class="bc-reason mt-1 text-muted"><i class="bi bi-stopwatch me-1"></i>{{ meta.get('convert_mode')|capitalize }} in {{ (meta.get('convert_seconds', 0) // 60)|int }}m {{ (meta.get('convert_seconds', 0) % 60)|int }}s</div>
+    {% endif %}
+    {% if dl.requested_by %}
+    <div class="bc-reason mt-1 text-muted"><i class="bi bi-megaphone me-1"></i>Requested by {{ dl.requested_by }}</div>
     {% endif %}
   </td>
   <td>
@@ -117,7 +129,7 @@
   <td>
     {{ confidence_badge(meta.get('match_confidence'), compact=True) }}
     {% if meta.get('match_confidence') is none %}<span class="text-muted small">—</span>{% endif %}
-    <div class="text-muted small mt-1">{{ dl.created_at.strftime("%Y-%m-%d %H:%M") if dl.created_at else "" }}</div>
+    <div class="text-muted small mt-1">{{ dl.created_at | localtime }}</div>
   </td>
   <td>
     <div class="d-flex gap-1 flex-wrap align-items-center">
@@ -134,6 +146,9 @@
       {% elif dl.m4b_status == "converted" and dl.abs_status in ("not_found", "failed") %}
         {{ row_button("/downloads/" ~ dl.id ~ "/reimport", "collection-play", "Re-import", cls="bc-btn-sm-primary", title="Ask Audiobookshelf to pick it up again") }}
       {% endif %}
+      <a class="btn btn-sm bc-btn-outline" href="/logs?download={{ dl.id }}" title="Everything logged for this book">
+        <i class="bi bi-terminal"></i>
+      </a>
       <button
         class="btn btn-sm"
         style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"

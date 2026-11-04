@@ -36,22 +36,102 @@ def ratio(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
+# "(Unabridged)", "[Abridged]", "(Dramatized Adaptation)" never help a comparison.
+_NOISE = re.compile(r"[(\[]\s*(?:un)?abridged\s*[)\]]|[(\[]\s*dramati[sz]ed[^)\]]*[)\]]", re.I)
+# "Title: Subtitle", "Series - Title"
+_SUBTITLE_SPLIT = re.compile(r"\s*:\s+|\s+[-–—]\s+")
+# "Title, Book 3", "Title (Book One)", "Title - Volume 2"
+_SERIES_SUFFIX = re.compile(
+    r"[,(\[]?\s*\b(?:book|volume|vol\.?|part|episode)\s+(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|"
+    r"eight|nine|ten|eleven|twelve)\b.*$", re.I)
+
+# "Leviathan Wakes (The Expanse, Book 1)"
+_TRAILING_BRACKETS = re.compile(r"\s*[(\[][^()\[\]]*[)\]]\s*$")
+
+# A match found only after dropping a subtitle or series marker is a little less certain.
+VARIANT_FACTOR = 0.95
+
+
+def title_variants(title: str) -> list[tuple[str, bool]]:
+    """The title plus its shorter forms, each with True if it is the whole title."""
+    full = _NOISE.sub("", title or "").strip()
+    variants = [(full, True)]
+    parts = [part for part in _SUBTITLE_SPLIT.split(full) if part.strip()]
+    if len(parts) > 1:
+        variants += [(parts[0], False), (parts[-1], False)]
+    without_series = _SERIES_SUFFIX.sub("", full).strip(" ,-–—")
+    if without_series and without_series != full:
+        variants.append((without_series, False))
+    without_brackets = _TRAILING_BRACKETS.sub("", full).strip(" ,-–—")
+    if without_brackets and without_brackets != full:
+        variants.append((without_brackets, False))
+    return [(v, whole) for v, whole in variants if normalize(v)]
+
+
+def title_similarity(a: str, b: str) -> float:
+    """
+    0-1 similarity of two book titles, tolerating subtitles and series markers on
+    either side: "Dune" matches "Dune: Book One in the Dune Chronicles".
+    """
+    best = 0.0
+    for x, x_whole in title_variants(a):
+        for y, y_whole in title_variants(b):
+            score = ratio(x, y)
+            if not (x_whole and y_whole):
+                score *= VARIANT_FACTOR
+            best = max(best, score)
+    return best
+
+
+def author_similarity(wanted: str, candidate: str) -> float:
+    """Audible joins several authors with commas; score against the best one."""
+    if not wanted or not candidate:
+        return 0.0
+    names = [candidate, *re.split(r",|&|\band\b", candidate)]
+    return max(ratio(wanted, name) for name in names if name.strip())
+
+
+def looks_like_series(author: str) -> bool:
+    """'Hunter Files 06' or 'Mistborn Book 1' is a series label, not a person."""
+    text = (author or "").strip()
+    return bool(re.search(r"\d$", text) or re.search(r"\b(?:book|vol|volume|series)\b", text, re.I))
+
+
 def compute_confidence(nzb_title: str, nzb_author: str, audible_title: str, audible_author: str) -> int:
     """
     Return 0-100 match confidence.
     Title is the decisive factor — if it scores < 50%, author match cannot save it.
     Above 50% title similarity, author (35%) is factored in.
     """
-    title_score = ratio(nzb_title, audible_title)
+    title_score = title_similarity(nzb_title, audible_title)
     if title_score < 0.5:
         return round(title_score * 100)
     if nzb_author and audible_author:
-        # Audible joins multiple authors with commas; score against the best one
-        author_score = max(ratio(nzb_author, a) for a in [audible_author, *audible_author.split(",")])
-        score = title_score * 0.65 + author_score * 0.35
+        score = title_score * 0.65 + author_similarity(nzb_author, audible_author) * 0.35
     else:
         score = title_score
     return round(score * 100)
+
+
+# Running time is the best edition check there is: the same title abridged, or a
+# different book, is a different length. Audible gives minutes.
+DURATION_MATCH_PERCENT = 3
+DURATION_MATCH_MINUTES = 5
+DURATION_MISMATCH_PERCENT = 15
+DURATION_BONUS = 5
+DURATION_MISMATCH_CAP = 70
+
+
+def duration_verdict(audio_minutes: float, audible_minutes: float) -> str:
+    """'match', 'mismatch' or '' (unknown, or close enough not to matter either way)."""
+    if not audio_minutes or not audible_minutes:
+        return ""
+    diff = abs(audio_minutes - audible_minutes)
+    if diff <= DURATION_MATCH_MINUTES or diff / audible_minutes * 100 <= DURATION_MATCH_PERCENT:
+        return "match"
+    if diff / audible_minutes * 100 > DURATION_MISMATCH_PERCENT:
+        return "mismatch"
+    return ""
 
 
 def audible_fields(book: dict) -> dict:
@@ -122,21 +202,34 @@ def language_mismatch(candidate_language: str, preferred_language: str) -> bool:
 
 
 def rank_candidates(results: list, title: str, author: str = "", limit: int = 8,
-                    preferred_language: str = "") -> list[dict]:
+                    preferred_language: str = "", audio_minutes: float = 0) -> list[dict]:
     """
     Normalised candidates, best first, each with a `confidence` score.
     Editions in a language other than `preferred_language` are scored down
     (and flagged `language_mismatch`) so they sort below — and never auto-convert
-    ahead of — an edition in the right language.
+    ahead of — an edition in the right language. When the downloaded audio's
+    length is known, a matching Audible length adds a little and a clearly
+    different one caps the score below any auto-convert threshold.
     """
-    ranked = []
-    for book in results[:25]:
+    ranked, seen = [], set()
+    for book in results[:40]:
         fields = audible_fields(book)
+        key = fields["asin"] or (normalize(fields["title"]), normalize(fields["author"]))
+        if key in seen:
+            continue  # several searches can return the same edition
+        seen.add(key)
         confidence = compute_confidence(title, author, fields["title"], fields["author"])
         fields["language_mismatch"] = language_mismatch(fields["language"], preferred_language)
         if fields["language_mismatch"]:
             confidence = max(0, min(confidence - LANGUAGE_MISMATCH_PENALTY, LANGUAGE_MISMATCH_CAP))
+        verdict = duration_verdict(audio_minutes, float(fields.get("duration") or 0))
+        fields["duration_match"] = verdict == "match"
+        fields["duration_mismatch"] = verdict == "mismatch"
+        if verdict == "match":
+            confidence = min(100, confidence + DURATION_BONUS)
+        elif verdict == "mismatch":
+            confidence = min(confidence, DURATION_MISMATCH_CAP)
         fields["confidence"] = confidence
         ranked.append(fields)
-    ranked.sort(key=lambda c: c["confidence"], reverse=True)
+    ranked.sort(key=lambda c: (c["confidence"], c["duration_match"]), reverse=True)
     return ranked[:limit]

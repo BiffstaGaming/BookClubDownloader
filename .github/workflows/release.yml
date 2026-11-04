@@ -62,6 +62,9 @@ jobs:
           docker run --rm -e PUID=1000 -e PGID=1000 \
             -v "$PWD/tests:/tests:ro" bookclub:ci python /tests/smoke/run_smoke.py
 
+      - name: Smoke test — Claude Code CLI runs as a non-root user
+        run: docker run --rm -e PUID=1000 -e PGID=1000 bookclub:ci claude --version
+
       - name: Smoke test — server starts and reports healthy
         run: |
           docker run -d --name bookclub-ci -e PUID=1000 -e PGID=1000 -p 9933:9933 bookclub:ci

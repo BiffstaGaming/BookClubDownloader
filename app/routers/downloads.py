@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.log_handler import log_to_db
-from app.models import Download
-from app.services import library
+from app.models import BookRequest, Download
+from app.services import book_requests, library
 from app.services.abs import AbsClient
 from app.services.matching import parse_nzb_name, rank_candidates
 from app.services.nzb import NzbError, fetch_nzb, search_nzbs, submit_to_nzbget
@@ -250,11 +250,68 @@ def alternatives(request: Request, download_id: int, db: Session = Depends(get_d
     )
 
 
+# ── requests ("find and download this book") ─────────────────────────────────
+
+def _request_rows(request: Request, db: Session, notice: str = ""):
+    rows = db.query(BookRequest).order_by(BookRequest.id.desc()).limit(8).all()
+    return templates.TemplateResponse(
+        "partials/request_rows.html", {"request": request, "requests": rows, "notice": notice})
+
+
+@router.get("/requests", response_class=HTMLResponse)
+def request_rows(request: Request, db: Session = Depends(get_db)):
+    return _request_rows(request, db)
+
+
+@router.post("/requests", response_class=HTMLResponse)
+def new_request(request: Request, query: str = Form(...), db: Session = Depends(get_db)):
+    if len(query.strip()) < 2:
+        return _request_rows(request, db, alert_html("warning", "Type the book's title (and author if you know it)."))
+    req = book_requests.create_request(db, query, "")
+    pipeline.run_soon(pipeline.process_request, req.id)
+    return _request_rows(request, db)
+
+
+@router.post("/requests/{request_id}/choose", response_class=HTMLResponse)
+def choose_request(request: Request, request_id: int, option: str = Form(default=""), force: str = Form(default=""),
+                   db: Session = Depends(get_db)):
+    req = db.get(BookRequest, request_id)
+    if not req:
+        return _request_rows(request, db)
+    error = book_requests.choose(db, req, int(option) if option.isdigit() else None, force=force == "1")
+    if error:
+        return _request_rows(request, db, alert_html("warning", error))
+    pipeline.run_soon(pipeline.process_request, req.id)
+    return _request_rows(request, db)
+
+
+@router.post("/requests/{request_id}/retry", response_class=HTMLResponse)
+def retry_request(request: Request, request_id: int, db: Session = Depends(get_db)):
+    req = db.get(BookRequest, request_id)
+    if req and req.status in ("not_found", "failed"):
+        error = book_requests.choose(db, req)
+        if not error:
+            pipeline.run_soon(pipeline.process_request, req.id)
+    return _request_rows(request, db)
+
+
+@router.delete("/requests/{request_id}", response_class=HTMLResponse)
+def remove_request(request: Request, request_id: int, db: Session = Depends(get_db)):
+    req = db.get(BookRequest, request_id)
+    if req:
+        if req.status in book_requests.ACTIVE_STATUSES:
+            req.status = "cancelled"  # still running: let it see the cancellation
+        else:
+            db.delete(req)
+        db.commit()
+    return _request_rows(request, db)
+
+
 # ── downloads page ────────────────────────────────────────────────────────────
 
 @router.get("", response_class=HTMLResponse)
 def downloads_page(request: Request, db: Session = Depends(get_db)):
-    downloads = _apply_dl_filter(db.query(Download), "active").order_by(Download.created_at.desc()).limit(5).all()
+    downloads = _apply_dl_filter(db.query(Download), "active").order_by(Download.created_at.desc()).limit(25).all()
     return templates.TemplateResponse(
         "downloads.html",
         {
@@ -286,7 +343,7 @@ def _apply_dl_filter(q, dl_filter: str):
 def sync_status(
     request: Request,
     dl_filter: str = Form(default="active"),
-    dl_limit: int = Form(default=5),
+    dl_limit: int = Form(default=25),
     db: Session = Depends(get_db),
 ):
     """Render the download rows. NZBGet is polled by the background pipeline, not here."""
@@ -371,6 +428,8 @@ def apply_match(request: Request, download_id: int, candidate: str = Form(...), 
                 "asin", "isbn", "language", "genres", "cover_url"):
         meta.pop(key, None)  # don't mix fields from a previous, different match
     apply_candidate(meta, chosen)
+    meta["match_method"] = f"you ({meta.get('match_confidence')}% match)"
+    meta.pop("review_reason", None)
     dl.set_metadata(meta)
     db.commit()
     log_to_db("INFO", "metadata", f"#{download_id}: match chosen — '{meta.get('title')}' by '{meta.get('author')}'",

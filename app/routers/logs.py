@@ -24,11 +24,17 @@ async def log_entries(
     request: Request,
     level: str = Query(default="ALL"),
     limit: int = Query(default=DEFAULT_LOG_LIMIT),
+    download: str = Query(default=""),
+    search: str = Query(default=""),
     db: Session = Depends(get_db),
 ):
     q = db.query(LogEntry)
     if level.upper() in VALID_LEVELS:
         q = q.filter(LogEntry.level == level.upper())
+    if download.strip().lstrip("#").isdigit():
+        q = q.filter(LogEntry.download_id == int(download.strip().lstrip("#")))
+    if search.strip():
+        q = q.filter(LogEntry.message.ilike(f"%{search.strip()}%"))
     effective_limit = max(1, limit) if limit > 0 else 500
     entries = q.order_by(LogEntry.created_at.desc()).limit(effective_limit).all()
     return templates.TemplateResponse(

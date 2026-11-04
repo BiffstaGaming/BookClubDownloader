@@ -537,8 +537,24 @@ select.bc-input optgroup {
   display: none;
 }
 
-.htmx-request .htmx-indicator {
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
   display: inline-block;
+}
+
+/* Row picked from a notification link (/downloads?highlight=ID) */
+tr.bc-highlight > td {
+  background: var(--accent-dim) !important;
+  transition: background 1s;
+}
+
+.navbar .nav-link.active {
+  color: var(--text-primary) !important;
+  border-bottom: 2px solid var(--accent);
+}
+
+.bc-reason {
+  font-size: 0.78rem;
 }
 
 /* ── Scrollbar (webkit) ─────────────────────────────────────── */

@@ -54,6 +54,9 @@ def migrate_db():
         ("downloads", "queued_at", "DATETIME"),
         ("downloads", "abs_status", "TEXT"),
         ("downloads", "abs_item_id", "TEXT"),
+        ("downloads", "imported_at", "DATETIME"),
+        ("downloads", "requested_by", "TEXT"),
+        ("downloads", "request_id", "INTEGER"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:

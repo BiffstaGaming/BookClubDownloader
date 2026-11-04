@@ -67,8 +67,8 @@
     </div>
   </nav>
 
-  <!-- HTMX loading indicator -->
-  <div class="htmx-indicator bc-loading-bar" id="global-indicator">
+  <!-- Loading bar for requests you started (background refreshes don't show it) -->
+  <div class="bc-loading-bar" id="global-indicator" style="display:none;">
     <div class="bc-loading-inner">
       <div class="spinner-border spinner-border-sm text-accent me-2" role="status">
         <span class="visually-hidden">Loading...</span>
@@ -91,14 +91,73 @@
   <!-- HTMX -->
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/htmx.min.js"></script>
   <script>
-    document.body.addEventListener('htmx:beforeRequest', function (evt) {
-      // Background refreshes of the downloads table shouldn't flash the loading bar
-      if (evt.detail.elt && evt.detail.elt.id === 'download-rows') return;
-      document.getElementById('global-indicator').style.display = 'flex';
-    });
-    document.body.addEventListener('htmx:afterRequest', function () {
-      document.getElementById('global-indicator').style.display = 'none';
-    });
+    (function () {
+      // ── loading bar: counts requests, ignores background polling ([data-bc-quiet]) ──
+      var inFlight = 0, bar = document.getElementById('global-indicator');
+      function quiet(elt) { return elt && elt.closest && elt.closest('[data-bc-quiet]'); }
+      document.body.addEventListener('htmx:beforeRequest', function (evt) {
+        if (quiet(evt.detail.elt)) return;
+        evt.detail.elt.__bcCounted = true;
+        inFlight++;
+        bar.style.display = 'flex';
+      });
+      document.body.addEventListener('htmx:afterRequest', function (evt) {
+        if (!evt.detail.elt.__bcCounted) return;
+        evt.detail.elt.__bcCounted = false;
+        inFlight = Math.max(0, inFlight - 1);
+        if (!inFlight) bar.style.display = 'none';
+      });
+
+      // ── alerts: success/info fade after a few seconds; every alert can be closed ──
+      function tidyAlerts(root) {
+        (root || document).querySelectorAll('.alert[data-autohide]:not([data-bc-timer])').forEach(function (el) {
+          el.setAttribute('data-bc-timer', '1');
+          setTimeout(function () {
+            el.style.transition = 'opacity .4s';
+            el.style.opacity = '0';
+            setTimeout(function () {
+              var panel = el.closest('[data-bc-clear-when-empty]');
+              el.remove();
+              if (panel && !panel.textContent.trim()) panel.innerHTML = '';
+            }, 450);
+          }, 6000);
+        });
+      }
+
+      // ── times: <time class="bc-time" datetime="...Z"> shown in this browser's timezone ──
+      var fmt = new Intl.DateTimeFormat(undefined, {
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+      });
+      function localTimes(root) {
+        (root || document).querySelectorAll('time.bc-time:not([data-bc-done])').forEach(function (el) {
+          var d = new Date(el.getAttribute('datetime'));
+          if (!isNaN(d)) { el.textContent = fmt.format(d); el.title = d.toString(); }
+          el.setAttribute('data-bc-done', '1');
+        });
+      }
+
+      function refresh(root) { tidyAlerts(root); localTimes(root); }
+      document.addEventListener('DOMContentLoaded', function () { refresh(); });
+      document.body.addEventListener('htmx:afterSettle', function (evt) { refresh(evt.detail.elt); });
+      refresh();
+
+      // ── highlight the current page in the nav ──
+      var path = location.pathname.replace(/\/$/, '') || '/';
+      document.querySelectorAll('.navbar .nav-link').forEach(function (a) {
+        var href = a.getAttribute('href');
+        if (href === path || (href !== '/' && path.indexOf(href) === 0)) a.classList.add('active');
+      });
+
+      // Small persistence helpers used by the pages
+      window.bcStore = {
+        get: function (key, fallback) {
+          try { var v = localStorage.getItem('bc:' + key); return v === null ? fallback : JSON.parse(v); }
+          catch (e) { return fallback; }
+        },
+        set: function (key, value) { try { localStorage.setItem('bc:' + key, JSON.stringify(value)); } catch (e) {} },
+        del: function (key) { try { localStorage.removeItem('bc:' + key); } catch (e) {} }
+      };
+    })();
   </script>
   {% block extra_js %}{% endblock %}
 </body>

@@ -10,6 +10,28 @@
     </h4>
   </div>
 
+  <!-- Requests (Home Assistant / voice, or typed here) -->
+  <div class="col-12" id="requests">
+    <div class="bc-card">
+      <div class="bc-card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <span><i class="bi bi-megaphone me-2 text-accent"></i>Requests</span>
+        <form class="d-flex gap-2 flex-grow-1 justify-content-end" style="max-width:520px;"
+              hx-post="/downloads/requests" hx-target="#request-rows" hx-swap="innerHTML"
+              hx-on::after-request="if(event.detail.successful) this.reset()">
+          <input type="text" name="query" class="form-control form-control-sm bc-input" required minlength="2"
+                 placeholder="Find and download… e.g. Project Hail Mary by Andy Weir" />
+          <button type="submit" class="btn bc-btn-sm-primary text-nowrap">
+            <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+            <i class="bi bi-lightning-charge me-1"></i>Request
+          </button>
+        </form>
+      </div>
+      <div class="bc-card-body p-0" id="request-rows" data-bc-quiet
+           hx-get="/downloads/requests" hx-trigger="load, every 10s, refreshRequests from:body" hx-swap="innerHTML">
+      </div>
+    </div>
+  </div>
+
   <div class="col-12">
     <div class="bc-card">
       <div class="bc-card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
@@ -23,9 +45,8 @@
         <div class="d-flex align-items-center gap-2">
           <span class="text-muted small">Max rows:</span>
           <select id="dl-limit-select" class="form-select form-select-sm" style="width:auto;" onchange="setDlLimit(this.value)">
-            <option value="5" selected>5</option>
             <option value="10">10</option>
-            <option value="25">25</option>
+            <option value="25" selected>25</option>
             <option value="50">50</option>
             <option value="0">All</option>
           </select>
@@ -35,7 +56,7 @@
       <!-- Hidden control inputs included with every HTMX poll -->
       <form id="dl-controls" style="display:none;">
         <input type="hidden" id="dl-filter-input" name="dl_filter" value="active" />
-        <input type="hidden" id="dl-limit-input" name="dl_limit" value="5" />
+        <input type="hidden" id="dl-limit-input" name="dl_limit" value="25" />
       </form>
 
       <div class="bc-card-body p-0">
@@ -53,9 +74,10 @@
             </thead>
             <tbody
               id="download-rows"
+              data-bc-quiet
               hx-post="/downloads/sync-status"
               hx-include="#dl-controls"
-              hx-trigger="load, every 10s, refreshDownloads from:body"
+              hx-trigger="every 10s, refreshDownloads from:body"
               hx-swap="innerHTML"
             >
               {% include "partials/download_rows.html" %}
@@ -67,7 +89,7 @@
   </div>
 
   <!-- Convert to M4B panel — populated by HTMX when Convert button is clicked -->
-  <div class="col-12" id="convert-panel"></div>
+  <div class="col-12" id="convert-panel" data-bc-clear-when-empty></div>
 </div>
 {% endblock %}
 
@@ -88,24 +110,51 @@
 .dl-filter-btn.active-filter { background: var(--accent); border-color: var(--accent); color: #fff; }
 </style>
 <script>
-function setDlFilter(f) {
-  document.getElementById('dl-filter-input').value = f;
-  document.querySelectorAll('.dl-filter-btn').forEach(function(btn) {
-    btn.classList.toggle('active-filter', btn.dataset.filter === f);
-  });
+// Filter and row count are remembered between visits.
+var highlightId = new URLSearchParams(location.search).get('highlight');
+
+function reloadRows() {
   htmx.ajax('POST', '/downloads/sync-status', {
     target: '#download-rows',
     swap: 'innerHTML',
-    values: { dl_filter: f, dl_limit: document.getElementById('dl-limit-input').value }
+    values: { dl_filter: document.getElementById('dl-filter-input').value,
+              dl_limit: document.getElementById('dl-limit-input').value }
   });
+}
+function applyDlControls(filter, limit) {
+  document.getElementById('dl-filter-input').value = filter;
+  document.getElementById('dl-limit-input').value = limit;
+  document.getElementById('dl-limit-select').value = limit;
+  document.querySelectorAll('.dl-filter-btn').forEach(function(btn) {
+    btn.classList.toggle('active-filter', btn.dataset.filter === filter);
+  });
+}
+function setDlFilter(f) {
+  applyDlControls(f, document.getElementById('dl-limit-input').value);
+  bcStore.set('downloads', { filter: f, limit: document.getElementById('dl-limit-input').value });
+  reloadRows();
 }
 function setDlLimit(l) {
-  document.getElementById('dl-limit-input').value = l;
-  htmx.ajax('POST', '/downloads/sync-status', {
-    target: '#download-rows',
-    swap: 'innerHTML',
-    values: { dl_filter: document.getElementById('dl-filter-input').value, dl_limit: l }
-  });
+  applyDlControls(document.getElementById('dl-filter-input').value, l);
+  bcStore.set('downloads', { filter: document.getElementById('dl-filter-input').value, limit: l });
+  reloadRows();
 }
+
+(function () {
+  var saved = bcStore.get('downloads', { filter: 'active', limit: '25' });
+  // A notification link to a finished book: show everything so the row is there.
+  applyDlControls(highlightId ? 'all' : saved.filter, highlightId ? '50' : String(saved.limit));
+  reloadRows();
+})();
+
+document.body.addEventListener('htmx:afterSettle', function (evt) {
+  if (!highlightId || evt.detail.elt.id !== 'download-rows') return;
+  var row = document.querySelector('#download-rows tr[data-dl-id="' + CSS.escape(highlightId) + '"]');
+  if (row) {
+    row.classList.add('bc-highlight');
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    highlightId = null;
+  }
+});
 </script>
 {% endblock %}

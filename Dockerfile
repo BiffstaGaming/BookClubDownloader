@@ -54,11 +54,21 @@ RUN case "${TARGETARCH:-amd64}" in \
     && install -m 0755 "/tmp/tone-${TONE_VERSION}-${TONE_ARCH}/tone" /usr/local/bin/tone \
     && rm -rf /tmp/tone*
 
+# Claude Code CLI for the optional AI reviewer — runs on your Claude plan via
+# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`), never the paid API.
+# The installer puts it under /root; copy the binary out so PUID users can run it.
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+    && install -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude \
+    && rm -rf /root/.local/bin/claude /root/.local/share/claude
+
 # tone does not need ICU culture data; skip the libicu dependency
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DISABLE_AUTOUPDATER=1
 
-RUN tone -v && m4b-tool --version && command -v setpriv
+# nice/taskset keep encoding at low priority and on the allowed cores
+RUN tone -v && m4b-tool --version && command -v setpriv && command -v nice && command -v taskset \
+    && claude --version
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

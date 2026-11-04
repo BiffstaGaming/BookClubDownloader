@@ -35,7 +35,6 @@
             hx-post="/search/nzb"
             hx-target="#nzb-results"
             hx-swap="innerHTML"
-            hx-indicator=".htmx-indicator"
             {% if auto_search and revealed_posts.get(post.msg_id) %}hx-trigger="submit, load"{% endif %}
           >
             <div class="row g-2 mb-3">
@@ -141,7 +140,6 @@
           hx-post="/search/thank"
           hx-target="#post-detail"
           hx-swap="innerHTML"
-          hx-indicator=".htmx-indicator"
           class="d-inline"
         >
           <input type="hidden" name="topic_id" value="{{ topic.topic_id }}" />

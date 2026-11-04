@@ -16,16 +16,17 @@
       <div class="bc-card-header d-flex align-items-center gap-3">
         <span class="step-badge">1</span>
         <span>Search abook.link Forum</span>
-        <span class="htmx-indicator ms-auto spinner-border spinner-border-sm text-accent" role="status">
+        <span id="forum-search-spinner" class="htmx-indicator ms-auto spinner-border spinner-border-sm text-accent" role="status">
           <span class="visually-hidden">Searching…</span>
         </span>
       </div>
       <div class="bc-card-body">
         <form
+          id="forum-search-form"
           hx-post="/search/forum"
           hx-target="#forum-results"
           hx-swap="innerHTML"
-          hx-indicator=".htmx-indicator"
+          hx-indicator="#forum-search-spinner"
         >
           <div class="input-group">
             <span class="input-group-text bc-input-addon">
@@ -33,6 +34,7 @@
             </span>
             <input
               type="text"
+              id="forum-query"
               name="query"
               class="form-control bc-input"
               placeholder="e.g. Stephen King The Stand"
@@ -42,8 +44,15 @@
             <button type="submit" class="btn bc-btn-primary px-4">
               <i class="bi bi-search me-1"></i>Search Forum
             </button>
+            <button type="button" class="btn bc-btn-outline d-none" id="clear-search" onclick="bcClearSearch()"
+                    title="Start a new search">
+              <i class="bi bi-x-lg"></i>
+            </button>
           </div>
         </form>
+        <div class="form-text text-muted d-none" id="restored-note">
+          <i class="bi bi-clock-history me-1"></i>Your last search was restored.
+        </div>
       </div>
     </div>
   </div>
@@ -61,8 +70,80 @@
 
 {% block extra_js %}
 <script>
+  // ── Keep the search when you go to another page or tab ───────────────────────
+  // The last search, the topic you opened and the NZB search are remembered in this
+  // browser (and in the address bar) and replayed when you come back. Thanked posts
+  // stay revealed on the forum, so nothing is thanked twice.
+  var restoring = false;
+
+  function bcSearchState() { return bcStore.get('search', {}); }
+  function bcSaveSearch(state) {
+    bcStore.set('search', state);
+    var params = new URLSearchParams();
+    if (state.q) params.set('q', state.q);
+    if (state.topic) params.set('topic', state.topic);
+    history.replaceState(null, '', params.toString() ? '/?' + params.toString() : '/');
+    document.getElementById('clear-search').classList.toggle('d-none', !state.q);
+  }
+  function bcClearSearch() {
+    bcStore.del('search');
+    history.replaceState(null, '', '/');
+    ['forum-results', 'post-detail', 'nzb-results'].forEach(function (id) {
+      document.getElementById(id).innerHTML = '';
+    });
+    document.getElementById('forum-query').value = '';
+    document.getElementById('clear-search').classList.add('d-none');
+    document.getElementById('restored-note').classList.add('d-none');
+    document.getElementById('forum-query').focus();
+  }
+
+  // Record each step as its request goes out.
+  document.body.addEventListener('htmx:configRequest', function (evt) {
+    if (restoring) return;
+    var path = evt.detail.path, params = evt.detail.parameters, state = bcSearchState();
+    if (path === '/search/forum') {
+      bcSaveSearch({ q: params.query });
+    } else if (path.indexOf('/search/topic/') === 0) {
+      bcSaveSearch({ q: state.q, topic: path.split('/').pop() });
+    } else if (path === '/search/thank') {
+      bcSaveSearch({ q: state.q, topic: params.topic_id });
+    } else if (path === '/search/nzb') {
+      var nzb = {};
+      Object.keys(params).forEach(function (k) { nzb[k] = params[k]; });
+      bcSaveSearch({ q: state.q, topic: state.topic, nzb: nzb });
+    }
+  });
+
+  // Replay the saved steps.
+  (function restore() {
+    var url = new URLSearchParams(location.search), saved = bcSearchState();
+    var state = url.get('q') ? { q: url.get('q'), topic: url.get('topic') || '' } : saved;
+    if (url.get('q') && saved.q === state.q && saved.topic === state.topic) state.nzb = saved.nzb;
+    if (!state.q) return;
+    restoring = true;
+    document.getElementById('forum-query').value = state.q;
+    document.getElementById('clear-search').classList.remove('d-none');
+    document.getElementById('restored-note').classList.remove('d-none');
+    bcSaveSearch(state);
+    htmx.ajax('POST', '/search/forum', { target: '#forum-results', swap: 'innerHTML', values: { query: state.q } })
+      .then(function () {
+        if (!state.topic) return;
+        var btn = document.querySelector('#forum-results tr[data-topic-id="' + CSS.escape(state.topic) + '"] button');
+        if (btn) selectForumResult(btn);
+        return htmx.ajax('GET', '/search/topic/' + encodeURIComponent(state.topic),
+                         { target: '#post-detail', swap: 'innerHTML' });
+      })
+      .then(function () {
+        if (state.topic && state.nzb) {
+          return htmx.ajax('POST', '/search/nzb', { target: '#nzb-results', swap: 'innerHTML', values: state.nzb });
+        }
+      })
+      .finally(function () { restoring = false; });
+  })();
+
   // After HTMX loads post-detail or nzb-results, scroll smoothly into view
   document.body.addEventListener('htmx:afterSwap', function(evt) {
+    if (restoring) return;
     var id = evt.detail.target.id;
     if (id === 'post-detail' || id === 'nzb-results') {
       setTimeout(function() {

@@ -5,6 +5,7 @@ All loggers whose name starts with "app." are automatically captured.
 To avoid infinite recursion, SQLAlchemy's own engine/pool logs are excluded.
 """
 import logging
+import threading
 from datetime import datetime
 
 
@@ -16,16 +17,17 @@ def _short_source(name: str) -> str:
 class DBLogHandler(logging.Handler):
     """Writes log records from app.* loggers into the LogEntry table."""
 
-    # Guard against re-entrant calls (e.g. if SQLAlchemy logs during our write)
-    _writing = False
+    # Guard against re-entrant calls (e.g. if SQLAlchemy logs during our write).
+    # Per thread: a class-wide flag dropped log lines from other threads.
+    _state = threading.local()
 
     def emit(self, record: logging.LogRecord):
-        if DBLogHandler._writing:
+        if getattr(DBLogHandler._state, "writing", False):
             return
         if not record.name.startswith("app."):
             return
 
-        DBLogHandler._writing = True
+        DBLogHandler._state.writing = True
         try:
             from app.database import SessionLocal
             from app.models import LogEntry
@@ -45,7 +47,7 @@ class DBLogHandler(logging.Handler):
             finally:
                 db.close()
         finally:
-            DBLogHandler._writing = False
+            DBLogHandler._state.writing = False
 
 
 def log_to_db(level: str, source: str, message: str, download_id: int = None):

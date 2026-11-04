@@ -14,19 +14,20 @@ os.chdir(Path(__file__).resolve().parents[1])  # templates/static are loaded rel
 
 from app.main import app  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import Download, LogEntry, Setting  # noqa: E402
+from app.models import BookRequest, Download, LogEntry, Setting  # noqa: E402
 from app.services import notify  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def clean_db(monkeypatch):
     db = SessionLocal()
-    for model in (Download, LogEntry, Setting):
+    for model in (Download, LogEntry, Setting, BookRequest):
         db.query(model).delete()
     db.commit()
     db.close()
     sent = []
     monkeypatch.setattr(notify, "post_webhook", lambda url, payload: sent.append(payload))
+    monkeypatch.setattr(notify, "RETRY_DELAYS", ())
     yield sent
 
 
