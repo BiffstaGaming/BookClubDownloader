@@ -108,6 +108,64 @@ class BookRequest(Base):
         }
 
 
+class ForumTopic(Base):
+    """Every forum topic BookClub has seen in a search — a local index of the forum."""
+    __tablename__ = "forum_topics"
+
+    topic_id = Column(String, primary_key=True)
+    title = Column(String, nullable=False)
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow)
+
+
+class ForumSearch(Base):
+    """A forum search and the topics it returned, so a repeat search needn't ask the forum."""
+    __tablename__ = "forum_searches"
+
+    query_key = Column(String, primary_key=True)     # normalised search text
+    query = Column(String, nullable=False)
+    topic_ids = Column(Text, nullable=False)          # JSON list, in the forum's order
+    searched_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RevealedPost(Base):
+    """
+    What a thanked post revealed — kept for good, since it never changes. Lets
+    BookClub (and you) send the same book to NZBGet again without the forum.
+    """
+    __tablename__ = "revealed_posts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    topic_id = Column(String, nullable=True, index=True)
+    msg_id = Column(String, nullable=True)
+    topic_title = Column(String, nullable=True)
+    search_term = Column(String, nullable=False, index=True)
+    password = Column(String, nullable=True)
+    title = Column(String, nullable=True)
+    author = Column(String, nullable=True)
+    series = Column(String, nullable=True)
+    series_part = Column(String, nullable=True)
+    narrator = Column(String, nullable=True)
+    raw_text = Column(Text, nullable=True)
+    revealed_at = Column(DateTime, default=datetime.utcnow)
+    times_sent = Column(Integer, default=0)
+    last_sent_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (Index("ix_revealed_topic_msg", "topic_id", "msg_id", unique=True),)
+
+    @property
+    def display_title(self) -> str:
+        return self.title or self.topic_title or self.search_term
+
+    def as_revealed(self) -> dict:
+        """The same shape the forum scraper returns for a revealed post."""
+        return {
+            "search_term": self.search_term, "password": self.password or "", "title": self.title or "",
+            "author": self.author or "", "series": self.series or "", "series_part": self.series_part or "",
+            "narrator": self.narrator or "", "raw_text": self.raw_text or "",
+        }
+
+
 class LogEntry(Base):
     __tablename__ = "logs"
 

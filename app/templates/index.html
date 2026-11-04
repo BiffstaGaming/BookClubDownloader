@@ -40,6 +40,13 @@
               placeholder="e.g. Stephen King The Stand"
               required
               autofocus
+              autocomplete="off"
+              data-bc-quiet
+              hx-get="/search/local"
+              hx-trigger="input changed delay:300ms"
+              hx-target="#local-topics"
+              hx-swap="innerHTML"
+              hx-sync="this:replace"
             />
             <button type="submit" class="btn bc-btn-primary px-4">
               <i class="bi bi-search me-1"></i>Search Forum
@@ -50,6 +57,7 @@
             </button>
           </div>
         </form>
+        <div id="local-topics" class="mt-2" data-bc-quiet></div>
         <div class="form-text text-muted d-none" id="restored-note">
           <i class="bi bi-clock-history me-1"></i>Your last search was restored.
         </div>
@@ -125,17 +133,17 @@
     document.getElementById('clear-search').classList.remove('d-none');
     document.getElementById('restored-note').classList.remove('d-none');
     bcSaveSearch(state);
-    htmx.ajax('POST', '/search/forum', { target: '#forum-results', swap: 'innerHTML', values: { query: state.q } })
+    htmx.ajax('POST', '/search/forum', { source: '#forum-results', target: '#forum-results', swap: 'innerHTML', values: { query: state.q } })
       .then(function () {
         if (!state.topic) return;
         var btn = document.querySelector('#forum-results tr[data-topic-id="' + CSS.escape(state.topic) + '"] button');
         if (btn) selectForumResult(btn);
         return htmx.ajax('GET', '/search/topic/' + encodeURIComponent(state.topic),
-                         { target: '#post-detail', swap: 'innerHTML' });
+                         { source: '#post-detail', target: '#post-detail', swap: 'innerHTML' });
       })
       .then(function () {
         if (state.topic && state.nzb) {
-          return htmx.ajax('POST', '/search/nzb', { target: '#nzb-results', swap: 'innerHTML', values: state.nzb });
+          return htmx.ajax('POST', '/search/nzb', { source: '#nzb-results', target: '#nzb-results', swap: 'innerHTML', values: state.nzb });
         }
       })
       .finally(function () { restoring = false; });

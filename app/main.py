@@ -25,6 +25,18 @@ logging.getLogger("app").addHandler(_db_handler)
 logging.getLogger("app").setLevel(logging.DEBUG)
 
 from app.services.pipeline import pipeline  # noqa: E402 — needs the tables above
+from app.services import forum_cache  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+from app.routers import saved as saved_router  # noqa: E402
+
+# Once: save the forum posts behind every download already in the history.
+_db = SessionLocal()
+try:
+    forum_cache.backfill_from_downloads(_db)
+except Exception:  # never stop the app from starting over this
+    logging.getLogger("app.main").exception("Could not save posts from the download history")
+finally:
+    _db.close()
 
 
 @asynccontextmanager
@@ -46,6 +58,7 @@ app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(downloads.router, prefix="/downloads", tags=["downloads"])
 app.include_router(settings_router.router, prefix="/settings", tags=["settings"])
 app.include_router(logs_router.router, prefix="/logs", tags=["logs"])
+app.include_router(saved_router.router, prefix="/saved", tags=["saved"])
 app.include_router(api_router.router, prefix="/api", tags=["api"])
 
 

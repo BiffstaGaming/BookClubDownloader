@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}BookClub — Saved Posts{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-12">
+    <h4 class="page-title mb-1">
+      <i class="bi bi-bookmark-star me-2 text-accent"></i>
+      Saved Posts
+    </h4>
+    <div class="text-muted small">
+      Everything a thanked forum post revealed — search term, password and book details — kept for good
+      ({{ total }} saved). Send a book to NZBGet again (e.g. after losing files) without visiting the forum.
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="bc-card">
+      <div class="bc-card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <form id="saved-controls" class="d-flex align-items-center gap-2 flex-grow-1" style="max-width:520px;"
+              onsubmit="return false;">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bc-input-addon"><i class="bi bi-search"></i></span>
+            <input type="text" name="q" id="saved-q" class="form-control bc-input"
+                   placeholder="Title, author, series, narrator or search term"
+                   hx-get="/saved/rows" hx-trigger="input changed delay:300ms" hx-target="#saved-rows"
+                   hx-include="#saved-controls" />
+          </div>
+        </form>
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-muted small">Max rows:</span>
+          <select name="limit" form="saved-controls" class="form-select form-select-sm" style="width:auto;"
+                  hx-get="/saved/rows" hx-trigger="change" hx-target="#saved-rows" hx-include="#saved-controls">
+            <option value="50" selected>50</option>
+            <option value="200">200</option>
+            <option value="0">All</option>
+          </select>
+        </div>
+      </div>
+      <div class="bc-card-body p-0">
+        <div class="table-responsive">
+          <table class="table bc-table mb-0">
+            <thead>
+              <tr>
+                <th>Book</th>
+                <th>Search Term</th>
+                <th>History</th>
+                <th class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="saved-rows" hx-get="/saved/rows" hx-trigger="load" hx-include="#saved-controls"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- "Choose NZB" results -->
+  <div class="col-12" id="saved-panel" data-bc-clear-when-empty></div>
+</div>
+{% endblock %}

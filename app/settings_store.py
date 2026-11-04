@@ -7,6 +7,7 @@ SETTING_KEYS = [
     "abook_url",
     "abook_username",
     "abook_password",
+    "forum_cache_hours",
     "nzbget_url",
     "nzbget_username",
     "nzbget_password",
@@ -63,6 +64,7 @@ DEFAULTS = {
     "preferred_language": "English",
     "poll_interval": "15",
     "log_retention_days": "14",
+    "forum_cache_hours": "12",
     # Speech-friendly AAC: mono at 22.05 kHz is about a quarter of the encoding work of
     # 44.1 kHz stereo, and sounds the same for a single narrator.
     "m4b_bitrate": "64k",

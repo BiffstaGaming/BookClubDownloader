@@ -75,6 +75,21 @@
               {{ secret_input("abook_password", "Password", autocomplete="current-password") }}
             </div>
           </div>
+          <div class="row g-3 mt-1">
+            <div class="col-sm-6">
+              <label for="forum_cache_hours" class="form-label bc-label">Reuse search results for</label>
+              <div class="input-group">
+                <input type="number" class="form-control bc-input" id="forum_cache_hours" name="forum_cache_hours"
+                       value="{{ settings.get('forum_cache_hours') }}" min="0" max="720" />
+                <span class="input-group-text bc-input-addon">hours</span>
+              </div>
+              <div class="form-text text-muted">
+                Searching the same thing again within this time uses BookClub's copy instead of the forum (there's a
+                Refresh button for new uploads). <code>0</code> = always ask the forum. Revealed posts are always kept —
+                see <a href="/saved" class="text-accent">Saved</a>.
+              </div>
+            </div>
+          </div>
           <!-- abook.link connection test -->
           <div class="d-flex align-items-center gap-3 flex-wrap mt-3">
             <button

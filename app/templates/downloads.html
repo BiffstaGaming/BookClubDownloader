@@ -114,7 +114,10 @@
 var highlightId = new URLSearchParams(location.search).get('highlight');
 
 function reloadRows() {
+  // `source` matters: without it htmx treats <body> as the requester and every
+  // loading spinner on the page lights up.
   htmx.ajax('POST', '/downloads/sync-status', {
+    source: '#download-rows',
     target: '#download-rows',
     swap: 'innerHTML',
     values: { dl_filter: document.getElementById('dl-filter-input').value,

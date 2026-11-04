@@ -1,0 +1,65 @@
+{% if posts %}
+{% for p in posts %}
+{% set dl = downloads.get(p.search_term) %}
+<tr data-saved-id="{{ p.id }}">
+  <td>
+    <div class="fw-semibold text-primary-light">{{ p.display_title }}</div>
+    <div class="text-muted small">
+      {% if p.author %}{{ p.author }}{% endif %}
+      {% if p.series %} · {{ p.series }}{% if p.series_part %} #{{ p.series_part }}{% endif %}{% endif %}
+      {% if p.narrator %} · read by {{ p.narrator }}{% endif %}
+    </div>
+    {% if p.topic_title and p.topic_title != p.display_title %}
+    <div class="text-muted small">{{ p.topic_title }}</div>
+    {% endif %}
+    {% if p.topic_id and topic_base %}
+    <a href="{{ topic_base }}{{ p.topic_id }}" target="_blank" rel="noopener" class="small text-accent">
+      <i class="bi bi-box-arrow-up-right me-1"></i>Forum topic #{{ p.topic_id }}
+    </a>
+    {% endif %}
+    {% if notices.get(p.id) %}<div class="mt-2">{{ notices.get(p.id) | safe }}</div>{% endif %}
+  </td>
+  <td>
+    <code class="bc-code">{{ p.search_term }}</code>
+    {% if p.password %}
+    <div class="mt-1"><span class="bc-password-badge"><i class="bi bi-key-fill me-1"></i>{{ p.password }}</span></div>
+    {% endif %}
+  </td>
+  <td class="small text-muted">
+    <div>Saved {{ p.revealed_at | localtime }}</div>
+    {% if p.times_sent %}
+    <div>Sent {{ p.times_sent }}×{% if p.last_sent_at %}, last {{ p.last_sent_at | localtime }}{% endif %}</div>
+    {% endif %}
+    {% if dl %}
+    <a href="/downloads?highlight={{ dl.id }}" class="text-decoration-none">
+      {% if dl.abs_status == "imported" %}<span class="badge bc-badge-success">In Audiobookshelf</span>
+      {% elif dl.m4b_status == "converted" %}<span class="badge bc-badge-success">Converted</span>
+      {% elif dl.status == "failed" or dl.m4b_status in ("m4b_failed", "move_failed") %}<span class="badge bc-badge-danger">Failed</span>
+      {% elif dl.status == "sent" %}<span class="badge bc-badge-muted">Downloading</span>
+      {% else %}<span class="badge bc-badge-muted">{{ dl.status }}</span>{% endif %}
+      <span class="small">#{{ dl.id }}</span>
+    </a>
+    {% endif %}
+  </td>
+  <td class="text-end text-nowrap">
+    <button class="btn bc-btn-sm-success" hx-post="/saved/{{ p.id }}/send" hx-target="closest tr" hx-swap="outerHTML"
+            title="Find the NZB for this search term and send it to NZBGet">
+      <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+      <i class="bi bi-send-fill me-1"></i>Send to NZBGet
+    </button>
+    <button class="btn bc-btn-outline btn-sm" hx-get="/saved/{{ p.id }}/nzbs" hx-target="#saved-panel" hx-swap="innerHTML"
+            onclick="document.getElementById('saved-panel').scrollIntoView({behavior:'smooth',block:'start'})"
+            title="See every NZB for this search term and pick one">
+      <i class="bi bi-list-ul me-1"></i>Choose NZB
+    </button>
+    <button class="btn btn-sm" style="background:var(--danger-dim);border:1px solid rgba(240,71,71,0.3);color:var(--danger);"
+            hx-delete="/saved/{{ p.id }}" hx-target="closest tr" hx-swap="outerHTML"
+            hx-confirm="Forget this saved post? (Downloads and files are not touched.)" title="Forget">
+      <i class="bi bi-trash3"></i>
+    </button>
+  </td>
+</tr>
+{% endfor %}
+{% else %}
+<tr><td colspan="4" class="text-center text-muted py-4">Nothing saved yet — posts you thank on the Search page appear here.</td></tr>
+{% endif %}

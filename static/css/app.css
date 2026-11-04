@@ -537,8 +537,11 @@ select.bc-input optgroup {
   display: none;
 }
 
-.htmx-request .htmx-indicator,
-.htmx-request.htmx-indicator {
+/* A spinner shows only while its own element (or a container inside the page)
+   is busy — never because <body> is marked busy, which would light up every
+   spinner at once. */
+body .htmx-request .htmx-indicator,
+body .htmx-request.htmx-indicator {
   display: inline-block;
 }
 

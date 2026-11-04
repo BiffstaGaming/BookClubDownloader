@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.log_handler import log_to_db
 from app.models import BookRequest, Download
-from app.services import book_requests, library
+from app.services import book_requests, forum_cache, library
 from app.services.abs import AbsClient
 from app.services.matching import parse_nzb_name, rank_candidates
 from app.services.nzb import NzbError, fetch_nzb, search_nzbs, submit_to_nzbget
@@ -153,6 +153,7 @@ def send_to_nzbget(
         replacing.nzb_hash, replacing.nzb_source, replacing.nzb_title = nzb_hash, nzb_source, nzb_title
         _reset_for_new_download(replacing, job_id)
         db.commit()
+        forum_cache.mark_sent(db, replacing.search_term or search_term)
         log_to_db("INFO", "download", f"#{replacing.id}: re-sent with another NZB (job {job_id})", download_id=replacing.id)
         return _refresh(alert("success", f"Sent the new NZB to NZBGet (job {job_id}). The download row has been updated."))
 
@@ -171,6 +172,7 @@ def send_to_nzbget(
     )
     db.add(record)
     db.commit()
+    forum_cache.mark_sent(db, search_term)
 
     logger.info("NZB '%s' sent to NZBGet with job ID %d", safe_name, job_id)
     return alert(

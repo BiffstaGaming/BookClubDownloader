@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.scrapers.abook import get_scraper
+from app.services import forum_cache
 from app.services.nzb import search_nzbs
 from app.services.pipeline import find_duplicates
 from app.settings_store import get_setting
@@ -38,21 +39,34 @@ def _topic_url(db: Session, topic_id: str) -> str:
 def search_forum(
     request: Request,
     query: str = Form(...),
+    refresh: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
+    """Forum search — a repeat of a recent search is answered from BookClub's own copy."""
     scraper = _get_abook_scraper(db)
     if scraper is None:
         return not_configured("abook.link")
     try:
-        with scraper.lock:
-            results = scraper.search(query)
+        results, cached_at = forum_cache.search(db, scraper, query, refresh=refresh == "1")
     except Exception as exc:
         logger.error("Forum search error: %s", exc)
         return alert("danger", f"Forum search failed: {exc}")
 
     return templates.TemplateResponse(
         "partials/forum_results.html",
-        {"request": request, "results": results, "query": query},
+        {"request": request, "results": results, "query": query, "cached_at": cached_at,
+         "revealed_ids": forum_cache.revealed_topic_ids(db, [r["topic_id"] for r in results])},
+    )
+
+
+@router.get("/local", response_class=HTMLResponse)
+def local_topics(request: Request, query: str = "", db: Session = Depends(get_db)):
+    """Topics BookClub has already seen that match what's being typed — no forum request."""
+    matches = forum_cache.local_matches(db, query)
+    return templates.TemplateResponse(
+        "partials/local_topics.html",
+        {"request": request, "matches": matches,
+         "revealed_ids": forum_cache.revealed_topic_ids(db, [m["topic_id"] for m in matches])},
     )
 
 
@@ -60,17 +74,26 @@ def search_forum(
 def get_topic(
     request: Request,
     topic_id: str,
+    refresh: str = "",
     db: Session = Depends(get_db),
 ):
-    scraper = _get_abook_scraper(db)
-    if scraper is None:
-        return not_configured("abook.link")
-    try:
-        with scraper.lock:
-            topic = scraper.get_topic(topic_id)
-    except Exception as exc:
-        logger.error("Get topic error for topic %s: %s", topic_id, exc)
-        return alert("danger", f"Failed to load topic: {exc}")
+    # A post revealed before is shown from BookClub's own store — no forum visit.
+    stored = None if refresh == "1" else forum_cache.topic_from_store(db, topic_id)
+    if stored:
+        topic = stored
+    else:
+        scraper = _get_abook_scraper(db)
+        if scraper is None:
+            return not_configured("abook.link")
+        try:
+            with scraper.lock:
+                topic = scraper.get_topic(topic_id)
+        except Exception as exc:
+            logger.error("Get topic error for topic %s: %s", topic_id, exc)
+            return alert("danger", f"Failed to load topic: {exc}")
+        for post in topic.get("posts", []):
+            if post.get("revealed"):
+                forum_cache.save_revealed(db, topic_id, post["msg_id"], topic.get("title", ""), post["revealed"])
 
     return templates.TemplateResponse(
         "partials/topic_content.html",
@@ -80,6 +103,7 @@ def get_topic(
             "topic_url": _topic_url(db, topic_id),
             "revealed_posts": {},
             "auto_search": False,
+            "from_store": bool(stored),
         },
     )
 
@@ -111,6 +135,8 @@ def thank_post(
     except Exception as exc:
         logger.error("Re-fetch topic error: %s", exc)
         topic = {"topic_id": topic_id, "title": post_title, "posts": []}
+
+    forum_cache.save_revealed(db, topic_id, msg_id, topic.get("title") or post_title, revealed)
 
     revealed_posts = {
         msg_id: {

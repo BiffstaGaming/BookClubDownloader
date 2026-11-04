@@ -13,6 +13,20 @@
     </button>
   </div>
   <div class="bc-card-body p-0">
+    {% if cached_at %}
+    <div class="d-flex align-items-center gap-2 px-3 py-2 small text-muted border-bottom" style="border-color:var(--border)!important;">
+      <i class="bi bi-lightning-charge"></i>
+      <span>From BookClub's copy of this search ({{ cached_at | localtime }}) — no forum request.</span>
+      <form class="ms-auto" hx-post="/search/forum" hx-target="#forum-results" hx-swap="innerHTML">
+        <input type="hidden" name="query" value="{{ query }}" />
+        <input type="hidden" name="refresh" value="1" />
+        <button type="submit" class="btn btn-sm bc-btn-outline">
+          <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+          <i class="bi bi-arrow-clockwise me-1"></i>Refresh from forum
+        </button>
+      </form>
+    </div>
+    {% endif %}
     {% if results %}
     <div class="table-responsive">
       <table class="table bc-table mb-0">
@@ -27,6 +41,10 @@
           <tr data-topic-id="{{ result.topic_id }}">
             <td>
               <span class="fw-semibold text-primary-light">{{ result.title }}</span>
+              {% if revealed_ids and result.topic_id in revealed_ids %}
+              <span class="badge bc-badge-success ms-1" title="Revealed before — opens from BookClub's saved copy">
+                <i class="bi bi-bookmark-star me-1"></i>Saved</span>
+              {% endif %}
               <div class="text-muted small">Topic #{{ result.topic_id }}</div>
             </td>
             <td class="text-end">

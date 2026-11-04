@@ -62,3 +62,13 @@ def test_alerts_can_be_closed_and_successes_fade(client, settings):
     from app.ui import alert_html
     assert 'data-bs-dismiss="alert"' in alert_html("danger", "x") and "data-autohide" not in alert_html("danger", "x")
     assert "data-autohide" in alert_html("success", "x")
+
+
+def test_every_htmx_ajax_call_names_its_source():
+    """Without `source`, htmx marks <body> busy and every spinner on the page lights up."""
+    import re
+    from pathlib import Path
+    for template in Path("app/templates").rglob("*.html"):
+        text = template.read_text(encoding="utf-8")
+        for call in re.findall(r"htmx\.ajax\([^;]*", text):
+            assert "source:" in call, f"{template}: {call[:80]}"

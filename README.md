@@ -79,6 +79,15 @@ Open `http://<host>:9933/settings`.
 - **Logs** keeps per-book detail including full m4b-tool output (pruned after
   the number of days set in Settings). The terminal button on a download row
   shows just that book's log.
+- **Saved** lists every forum post BookClub has revealed: search term, password
+  and book details, kept for good. *Send to NZBGet* finds the NZB for it and
+  starts the download again (e.g. after losing files) without visiting the forum;
+  *Choose NZB* lists every NZB to pick one. Posts behind your existing download
+  history are added the first time this version starts.
+- Forum searches are reused for a few hours (*Settings → abook.link → Reuse
+  search results for*; a *Refresh from forum* button picks up new uploads), and a
+  post revealed before opens from the saved copy. While you type, topics BookClub
+  has already seen are suggested. All of this means fewer requests to the forum.
 - The Search page, Downloads filters and Logs filters are remembered when you
   switch pages or tabs. Times are shown in your browser's timezone.
 

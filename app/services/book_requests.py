@@ -16,7 +16,7 @@ from datetime import datetime
 from app.database import SessionLocal
 from app.log_handler import log_to_db
 from app.models import BookRequest, Download
-from app.services import ai, library
+from app.services import ai, forum_cache, library
 from app.services.matching import author_similarity, normalize, parse_nzb_name, title_similarity
 from app.services.nzb import fetch_nzb, search_nzbs, submit_to_nzbget
 from app.settings_store import get_bool, get_setting
@@ -89,6 +89,10 @@ class _Cancelled(Exception):
     """The request was cancelled from the UI or API while it was running."""
 
 
+class NoNzbFound(Exception):
+    """Neither indexer has an NZB for the search term (the post may have expired)."""
+
+
 def _set(db, req: BookRequest, status: str, message: str = "", **fields):
     db.refresh(req)
     if req.status == "cancelled":
@@ -108,14 +112,13 @@ def _event(req: BookRequest, event: str, **fields) -> tuple[str, dict]:
                    "requested_by": req.requested_by or "", "message": req.message or "", **fields}
 
 
-def _search_forum(scraper, query: str) -> list[dict]:
+def _search_forum(db, scraper, query: str) -> list[dict]:
     """Forum search matches all words, so try the title alone before the whole request."""
     title, author = split_query(query)
     attempts = [title, f"{title} {author}".strip(), query]
     seen, results = set(), []
     for term in dict.fromkeys(a for a in attempts if a):
-        with scraper.lock:
-            found = scraper.search(term)
+        found, _cached_at = forum_cache.search(db, scraper, term)
         for topic in found:
             if topic["topic_id"] not in seen:
                 seen.add(topic["topic_id"])
@@ -142,16 +145,26 @@ def _choose_topic(db, req: BookRequest, topics: list[dict]) -> tuple[str, str]:
     return "", "several forum topics could be it"
 
 
-def _reveal(scraper, topic_id: str) -> tuple[dict, dict, str]:
-    """(topic, revealed post fields, msg_id) for the first post with hidden content."""
+def _reveal(db, scraper, topic_id: str) -> tuple[dict, dict, str]:
+    """
+    (topic, revealed post fields, msg_id) for the first post with hidden content.
+    A post revealed before comes from BookClub's own store; otherwise it is
+    thanked on the forum and saved.
+    """
+    stored = forum_cache.topic_from_store(db, topic_id)
+    if stored:
+        post = stored["posts"][0]
+        return stored, post["revealed"], post["msg_id"]
     with scraper.lock:
         topic = scraper.get_topic(topic_id)
     for post in topic.get("posts", []):
         if post.get("revealed") and post["revealed"].get("search_term"):
+            forum_cache.save_revealed(db, topic_id, post["msg_id"], topic.get("title", ""), post["revealed"])
             return topic, post["revealed"], post["msg_id"]
         if post.get("has_hidden") and post.get("thank_href"):
             with scraper.lock:
                 revealed = scraper.thank_and_get_content(topic_id, post["msg_id"], post["thank_href"])
+            forum_cache.save_revealed(db, topic_id, post["msg_id"], topic.get("title", ""), revealed)
             return topic, revealed, post["msg_id"]
     return topic, {}, ""
 
@@ -166,6 +179,38 @@ def _find_nzb(term: str) -> dict | None:
         if results:
             return results[0]
     return None
+
+
+def send_post(db, revealed: dict, topic_id: str = "", msg_id: str = "", post_title: str = "",
+              requested_by: str = None, request_id: int = None, before_send=None) -> Download:
+    """
+    Find the NZB for a revealed post's search term, send it to NZBGet and add
+    the download row. Used by requests and by the Saved page's "Send again".
+    Raises NoNzbFound, or whatever fetching/sending raised.
+    """
+    term = (revealed.get("search_term") or "").strip()
+    nzb = _find_nzb(term)
+    if not nzb:
+        raise NoNzbFound(f"No NZB found for '{term}' — the post may have expired")
+    if before_send:
+        before_send()
+    source = nzb.get("source") or "nzbking"
+    content = fetch_nzb(source, nzb["nzb_hash"], nzb.get("title", ""))
+    safe_name = library.sanitize_filename(post_title or revealed.get("title") or nzb.get("title") or term)
+    password = revealed.get("password", "")
+    job_id = submit_to_nzbget(db, content, safe_name, password)
+    metadata = {k: revealed.get(k) for k in ("title", "author", "series", "series_part", "narrator") if revealed.get(k)}
+    dl = Download(
+        post_title=post_title or revealed.get("title") or term, topic_id=topic_id or None, msg_id=msg_id or None,
+        search_term=term, password=password, nzb_name=safe_name, nzb_hash=nzb["nzb_hash"], nzb_source=source,
+        nzb_title=nzb.get("title", ""), nzbget_id=job_id, status="sent", requested_by=requested_by,
+        request_id=request_id, download_metadata=json.dumps(metadata, ensure_ascii=False) if metadata else None,
+    )
+    db.add(dl)
+    db.commit()
+    forum_cache.mark_sent(db, term)
+    log_to_db("INFO", "download", f"#{dl.id}: '{dl.post_title}' sent to NZBGet (job {job_id})", download_id=dl.id)
+    return dl
 
 
 def run_request(request_id: int) -> tuple[str, dict] | None:
@@ -192,7 +237,7 @@ def run_request(request_id: int) -> tuple[str, dict] | None:
         try:
             topic_id = req.topic_id
             if not topic_id:
-                topics = _search_forum(scraper, req.query)
+                topics = _search_forum(db, scraper, req.query)
                 if not topics:
                     _set(db, req, "not_found", f"Nothing on the forum matches '{req.query}'")
                     return _event(req, "request_not_found")
@@ -206,7 +251,7 @@ def run_request(request_id: int) -> tuple[str, dict] | None:
                 req.topic_id = topic_id
                 db.commit()
 
-            topic, revealed, msg_id = _reveal(scraper, topic_id)
+            topic, revealed, msg_id = _reveal(db, scraper, topic_id)
             term = (revealed.get("search_term") or "").strip()
             post_title = topic.get("title") or req.query
             if not term:
@@ -221,29 +266,17 @@ def run_request(request_id: int) -> tuple[str, dict] | None:
                     _set(db, req, "duplicate", "; ".join(duplicates))
                     return _event(req, "request_duplicate", title=book_title, author=book_author)
 
-            nzb = _find_nzb(term)
-            if not nzb:
-                _set(db, req, "not_found", f"No NZB found for '{term}' — the post may have expired")
+            def still_wanted():
+                db.refresh(req)
+                if req.status == "cancelled":
+                    raise _Cancelled()
+            try:
+                dl = send_post(db, revealed, topic_id, msg_id, post_title, req.requested_by, req.id,
+                               before_send=still_wanted)
+            except NoNzbFound as exc:
+                _set(db, req, "not_found", str(exc))
                 return _event(req, "request_not_found", title=book_title, author=book_author)
-
-            db.refresh(req)
-            if req.status == "cancelled":
-                raise _Cancelled()
-            source = nzb.get("source") or "nzbking"
-            content = fetch_nzb(source, nzb["nzb_hash"], nzb.get("title", ""))
-            safe_name = library.sanitize_filename(post_title or nzb.get("title") or term)
-            password = revealed.get("password", "")
-            job_id = submit_to_nzbget(db, content, safe_name, password)
-
-            metadata = {k: revealed.get(k) for k in ("title", "author", "series", "series_part", "narrator") if revealed.get(k)}
-            dl = Download(
-                post_title=post_title, topic_id=topic_id, msg_id=msg_id, search_term=term, password=password,
-                nzb_name=safe_name, nzb_hash=nzb["nzb_hash"], nzb_source=source, nzb_title=nzb.get("title", ""),
-                nzbget_id=job_id, status="sent", requested_by=req.requested_by, request_id=req.id,
-                download_metadata=json.dumps(metadata, ensure_ascii=False) if metadata else None,
-            )
-            db.add(dl)
-            db.commit()
+            job_id = dl.nzbget_id
             _set(db, req, "sent", f"Downloading '{post_title}' (NZBGet job {job_id})", download_id=dl.id)
             return _event(req, "request_sent", title=book_title, author=book_author, download_id=dl.id)
         except _Cancelled:

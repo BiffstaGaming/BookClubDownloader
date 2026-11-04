@@ -14,14 +14,16 @@ os.chdir(Path(__file__).resolve().parents[1])  # templates/static are loaded rel
 
 from app.main import app  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import BookRequest, Download, LogEntry, Setting  # noqa: E402
+from app.models import (  # noqa: E402
+    BookRequest, Download, ForumSearch, ForumTopic, LogEntry, RevealedPost, Setting,
+)
 from app.services import notify  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def clean_db(monkeypatch):
     db = SessionLocal()
-    for model in (Download, LogEntry, Setting, BookRequest):
+    for model in (Download, LogEntry, Setting, BookRequest, ForumTopic, ForumSearch, RevealedPost):
         db.query(model).delete()
     db.commit()
     db.close()
