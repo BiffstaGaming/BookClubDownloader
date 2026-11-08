@@ -412,9 +412,11 @@ inside the built image by CI (`.github/workflows/release.yml`).
 Instead of the YAML above, Home Assistant can talk to BookClub through its own
 integration (`custom_components/bookclub`, Home Assistant 2024.8 or newer).
 
-Install: *HACS → ⋮ → Custom repositories*, add
-`https://github.com/BiffstaGaming/Book-Club-Downloader` with category
-*Integration*, download **BookClub** and restart Home Assistant. Then *Settings →
+Install (Home Assistant 2026.11 and newer): *Settings → Marketplace → Add from
+link*, enter `https://github.com/BiffstaGaming/BookClubDownloader`, type
+*Integration*, then *Install*. On older versions use *HACS → ⋮ → Custom
+repositories* with the same link, download **BookClub** and restart Home
+Assistant. Both install the newest GitHub release (a `v*` tag). Then *Settings →
 Devices & services → Add integration → BookClub*, enter the BookClub address
 (e.g. `http://192.168.1.10:9933`) and the API token from *Settings → Home
 Assistant*. The integration's options set the update interval (30 s), whether
