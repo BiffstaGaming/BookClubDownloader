@@ -9,6 +9,15 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
+def element_text(element) -> str:
+    """
+    An element's text with its spacing as the forum shows it. get_text(strip=True)
+    glues the pieces together, and search results wrap each searched word in its own
+    <strong class="highlight">, so "Legacy of Gods 01" came out as "LegacyofGods01".
+    """
+    return re.sub(r"\s+", " ", element.get_text()).strip()
+
+
 class AbookScraper:
     def __init__(self, base_url: str, username: str, password: str):
         self.base_url = base_url.rstrip("/")
@@ -179,7 +188,7 @@ class AbookScraper:
                 if topic_id in seen_ids:
                     continue
                 seen_ids.add(topic_id)
-                title = topic_anchor.get_text(strip=True)
+                title = element_text(topic_anchor)
                 if not title:
                     continue
                 results.append({
@@ -228,7 +237,7 @@ class AbookScraper:
 
                 # Subject line is in <h5 id="subject_MSGID">
                 subject_el = wrapper.find("h5", id=f"subject_{msg_id}")
-                subject = subject_el.get_text(strip=True) if subject_el else ""
+                subject = element_text(subject_el) if subject_el else ""
 
                 # Thank button is in <a class="thank_you_button_link"> inside .quickbuttons
                 thank_anchor = wrapper.find("a", class_="thank_you_button_link")

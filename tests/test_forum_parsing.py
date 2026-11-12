@@ -52,3 +52,33 @@ def test_unlabelled_boxes_fall_back_to_order():
 def test_no_password_box():
     result = parse(code("Search:", "only-a-term"))
     assert (result["search_term"], result["password"]) == ("only-a-term", "")
+
+
+class _Response:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+def test_search_titles_keep_spaces_around_highlighted_words():
+    # Search results wrap each searched word in <strong class="highlight">
+    hl = '<strong class="highlight">{}</strong>'.format
+    html = (f'<h5><a href="?board=5.0">Romance</a> / <a href="?topic=123.msg456#msg456">Rina Kent - '
+            f'{hl("Legacy")} {hl("of")} {hl("Gods")} 01 - God {hl("of")} Malice (2022)</a></h5>'
+            f'<h5><a href="?board=7.0">Fantasy</a> / <a href="?topic=124.msg457#msg457">Stacey Brutger - '
+            f'Clash {hl("of")} the Demi{hl("gods")} 03 - Daemon {hl("Legacy")} (2022)</a></h5>')
+    scraper = AbookScraper("https://example/index.php", "u", "p")
+    scraper._request = lambda *args, **kwargs: _Response(html)
+    titles = [t["title"] for t in scraper.search("legacy of gods")]
+    assert titles == ["Rina Kent - Legacy of Gods 01 - God of Malice (2022)",
+                      "Stacey Brutger - Clash of the Demigods 03 - Daemon Legacy (2022)"]
+
+
+def test_series_watch_reads_highlighted_search_titles():
+    from app.services.wishlist import by_author, parse_series_topic, same_series
+    title = "Rina Kent - Legacy of Gods 01 - God of Malice (2022)"
+    series, number = parse_series_topic(title)
+    assert (series, number) == ("Legacy of Gods", "1")
+    assert same_series("Legacy of Gods", series) and by_author("Rina Kent", title)
