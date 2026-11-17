@@ -110,6 +110,17 @@ class NzbgetClient:
         logger.info("NzbgetClient.add_nzb: added '%s' with job ID %d", safe_name, job_id)
         return job_id
 
+    def unpack_again(self, nzb_id: int, password: str) -> None:
+        """
+        Post-process a failed history item again (par-check, unpack, scripts) with a new
+        unpack password, using the files NZBGet already downloaded: no re-download.
+        Raises ValueError when NZBGet refuses (the job left its history).
+        """
+        if not self._rpc("editqueue", ["HistorySetParameter", f"*Unpack:Password={password}", [nzb_id]]):
+            raise ValueError(f"NZBGet no longer has job {nzb_id} in its history")
+        if not self._rpc("editqueue", ["HistoryProcess", "", [nzb_id]]):
+            raise ValueError(f"NZBGet refused to unpack job {nzb_id} again")
+
     def get_history(self) -> list:
         """Return nzbget's download history list."""
         result = self._rpc("history", [False])

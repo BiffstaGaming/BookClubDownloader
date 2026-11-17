@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models import Download
 from app.scrapers.abook import get_scraper
 from app.services import forum_cache, prowlarr, releases
 from app.services.nzb import rank_nzbs, search_nzbs
@@ -282,12 +283,24 @@ def search_indexers(request: Request, query: str = Form(default=""), db: Session
 
 @router.post("/release", response_class=HTMLResponse)
 def send_release(guid: str = Form(...), book_title: str = Form(default=""), book_author: str = Form(default=""),
-                 force: str = Form(default=""), db: Session = Depends(get_db)):
+                 force: str = Form(default=""), replace_id: str = Form(default=""), db: Session = Depends(get_db)):
     with _releases_lock:
         entry = _releases.get(guid)
     if not entry:
         return alert("warning", "That result has expired — search again.")
     release = entry[1]
+    replacing = db.get(Download, int(replace_id)) if replace_id.isdecimal() else None
+    if replacing:
+        # "Fix & retry" on a failed download: the same row tries this result instead.
+        try:
+            releases.replace_with_release(db, replacing, release)
+        except Exception as exc:
+            logger.warning("Replacing download #%s with '%s' failed: %s", replacing.id, release["title"], exc)
+            return alert("danger", f"Not sent: {exc}")
+        where = "qBittorrent" if replacing.is_torrent else "NZBGet"
+        response = alert("success", f"Sent to {where} — the download row follows it now.")
+        response.headers["HX-Trigger"] = "refreshDownloads"
+        return response
     if force != "1":
         duplicates = find_duplicates(db, book_title or release["title"], book_author, nzb_hash=release["guid"][:500])
         if duplicates:

@@ -85,7 +85,13 @@ Assistant API needs its own token.
     (*Settings → NZBGet → try another NZB*, 2 times by default). NZBs are chosen
     M4B first, then complete (largest) and newest. A wrong password is not retried.
   - Failed downloads stay listed with the reason (wrong password, missing
-    articles, …) and *Retry* / *Other NZB* buttons.
+    articles, …). *Retry* sends the same NZB again; *Fix & retry* opens every
+    step to change and run again: the forum post (each hidden post's search word
+    and password, or read the post again), the search word and password, then
+    *Unpack again* (NZBGet reuses the files it already downloaded, for a wrong
+    password), *Download it again*, *Find other NZBs* with the changed search
+    word, or a search of your indexers through Prowlarr with a changed title.
+    Whatever you pick, the same download row follows it.
   - Conversions run one at a time; *Dequeue* or *Stop* as needed. A restart
     resumes the queue.
   - Once imported, the row links straight to the book in Audiobookshelf.

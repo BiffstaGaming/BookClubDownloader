@@ -11,10 +11,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.log_handler import log_to_db
 from app.models import BookRequest, Download, LogEntry
-from app.services import book_requests, forum_cache, library
+from app.services import book_requests, forum_cache, library, prowlarr, releases
 from app.services.abs import AbsClient
 from app.services.matching import parse_nzb_name, rank_candidates
-from app.services.nzb import NzbError, fetch_nzb, find_nzbs, submit_to_nzbget
+from app.services.nzb import NzbError, fetch_nzb, find_nzbs, nzbget_client, submit_to_nzbget
 from app.services.pipeline import (
     apply_candidate, check_input_folder, enqueue, find_duplicates, mark_handled_by_hand, pipeline, queue_positions,
     reset_auto_state, reset_for_new_download,
@@ -135,7 +135,7 @@ def send_to_nzbget(
 
     safe_name = library.sanitize_filename(post_title or nzb_title or search_term or nzb_hash)
     if replacing:
-        password = password or replacing.password or ""
+        # The replacement's own search word and password (they may have been changed under "Fix & retry").
         safe_name = replacing.nzb_name or safe_name
     try:
         # A deliberate re-send ("Send anyway", another NZB) must not be dropped by NZBGet's duplicate check.
@@ -159,6 +159,9 @@ def send_to_nzbget(
             meta.pop(key, None)
         replacing.set_metadata(meta)
         replacing.nzb_hash, replacing.nzb_source, replacing.nzb_title = nzb_hash, nzb_source, nzb_title
+        replacing.search_term = search_term or replacing.search_term
+        replacing.password = password
+        replacing.client, replacing.torrent_hash = None, None
         reset_for_new_download(replacing, job_id)
         db.commit()
         forum_cache.mark_sent(db, replacing.search_term or search_term)
@@ -195,19 +198,25 @@ def retry_download(request: Request, download_id: int, db: Session = Depends(get
     dl = _get(db, download_id)
     if not dl:
         return HTMLResponse('<tr><td colspan="6">Not found.</td></tr>')
-    if not dl.nzb_hash or dl.is_torrent:
-        dl.error_message = ("Torrents can't be re-sent from here — search again on the Search page" if dl.is_torrent
-                            else "No NZB recorded for this download — use 'Other NZB' instead")
+    error = _resend_same_nzb(db, dl)
+    if error:
+        dl.error_message = error
         db.commit()
-        return _rows(request, db, [dl])
+    return _rows(request, db, [dl])
+
+
+def _resend_same_nzb(db: Session, dl: Download) -> str:
+    """Fetch the download's NZB again and send it to NZBGet with its (current) password. "" or why not."""
+    if dl.is_torrent:
+        return "Torrents can't be re-sent — use Fix & retry to pick another result"
+    if not dl.nzb_hash:
+        return "No NZB recorded for this download — use Fix & retry to find one"
     try:
         content = fetch_nzb(dl.nzb_source or "nzbking", dl.nzb_hash, dl.nzb_title or dl.nzb_name or "",
                             url=dl.parsed_metadata.get("download_url", ""))
         job_id = submit_to_nzbget(db, content, dl.nzb_name or f"bookclub-{dl.id}", dl.password or "", force=True)
     except Exception as exc:
-        dl.error_message = f"Retry failed: {exc}"
-        db.commit()
-        return _rows(request, db, [dl])
+        return f"Retry failed: {exc}"
     reset_auto_state(dl)
     meta = dl.parsed_metadata
     meta.pop("nzb_retries", None)  # a fresh start for the automatic "try another NZB"
@@ -215,34 +224,169 @@ def retry_download(request: Request, download_id: int, db: Session = Depends(get
     reset_for_new_download(dl, job_id)
     db.commit()
     log_to_db("INFO", "download", f"#{dl.id}: re-sent to NZBGet (job {job_id})", download_id=dl.id)
-    return _rows(request, db, [dl])
+    return ""
 
 
-@router.get("/{download_id}/alternatives", response_class=HTMLResponse)
-def alternatives(request: Request, download_id: int, db: Session = Depends(get_db)):
-    """Search both indexers again so a failed download can be replaced with another NZB."""
+# ── "Fix & retry": every step of a failed download, editable ──────────────────
+
+_GONE = "This download isn't failed any more — close this panel."
+
+
+def _failed(db: Session, download_id: int) -> Download | None:
     dl = _get(db, download_id)
-    if not dl:
-        return alert("danger", "Download not found.")
-    term = dl.search_term or ""
-    if not term:
-        return alert("warning", "No search term recorded for this download — search again from the Search page.")
-    found, notes = find_nzbs(term, every_source=True)
-    results = [r for r in found if r.get("nzb_hash") != dl.nzb_hash]
-    if not results:
-        notes.append("Only the NZB that already failed was found." if dl.nzb_hash else "No NZBs found.")
+    return dl if dl and dl.status == "failed" else None
+
+
+def _keep_fields(dl: Download, search_term: str, password: str) -> None:
+    """The search word and password as typed in the panel (an empty password is a real choice)."""
+    dl.search_term = search_term.strip() or dl.search_term
+    dl.password = password.strip()
+
+
+def _fix_panel(request: Request, db: Session, dl: Download, notice: str = "", error: str = ""):
     meta = dl.parsed_metadata
-    return templates.TemplateResponse(
-        "partials/nzb_results.html",
-        {
-            "request": request, "results": results, "notes": notes, "duplicates": [],
-            "search_term": term, "password": dl.password or "", "post_title": dl.post_title or "",
-            "topic_id": dl.topic_id or "", "msg_id": dl.msg_id or "",
-            "book_title": meta.get("title", ""), "book_author": meta.get("author", ""),
-            "book_series": meta.get("series", ""), "book_series_part": meta.get("series_part", ""),
-            "book_narrator": meta.get("narrator", ""), "replace_id": str(dl.id),
-        },
-    )
+    title, author = parse_nzb_name(dl.post_title or dl.nzb_name or "")
+    query = " ".join(x for x in (meta.get("title") or title, meta.get("author") or author) if x)
+    posts = forum_cache.revealed_for_topic(db, dl.topic_id) if dl.topic_id else []
+    return templates.TemplateResponse("partials/fix_download.html", {
+        "request": request, "dl": dl, "notice": notice, "error": error, "posts": posts,
+        "forum_url": get_setting(db, "abook_url").rstrip("/"),
+        "forum_ready": book_requests._scraper(db) is not None,
+        "nzbget_ready": bool(get_setting(db, "nzbget_url")),
+        "prowlarr_ready": prowlarr.configured(db),
+        "can_resend": bool(dl.nzb_hash) and not dl.is_torrent
+                      and (dl.nzb_source != "prowlarr" or bool(meta.get("download_url"))),
+        "indexer_query": query or dl.search_term or "",
+    })
+
+
+@router.get("/{download_id}/fix", response_class=HTMLResponse)
+def fix_panel(request: Request, download_id: int, db: Session = Depends(get_db)):
+    dl = _failed(db, download_id)
+    return _fix_panel(request, db, dl) if dl else alert("info", _GONE)
+
+
+@router.post("/{download_id}/fix/save", response_class=HTMLResponse)
+def fix_save(request: Request, download_id: int, search_term: str = Form(default=""),
+             password: str = Form(default=""), db: Session = Depends(get_db)):
+    dl = _failed(db, download_id)
+    if not dl:
+        return alert("info", _GONE)
+    _keep_fields(dl, search_term, password)
+    db.commit()
+    log_to_db("INFO", "download", f"#{dl.id}: search word / password changed by hand", download_id=dl.id)
+    return _refresh(_fix_panel(request, db, dl, notice="Saved."))
+
+
+@router.post("/{download_id}/fix/unpack", response_class=HTMLResponse)
+def fix_unpack(request: Request, download_id: int, search_term: str = Form(default=""),
+               password: str = Form(default=""), db: Session = Depends(get_db)):
+    """Wrong password: NZBGet unpacks the files it already downloaded again, with the new password."""
+    dl = _failed(db, download_id)
+    if not dl:
+        return alert("info", _GONE)
+    _keep_fields(dl, search_term, password)
+    db.commit()
+    if not dl.nzbget_id or dl.is_torrent:
+        return _fix_panel(request, db, dl, error="NZBGet has no job for this download — download it again instead.")
+    try:
+        nzbget_client(db).unpack_again(dl.nzbget_id, dl.password or "")
+    except Exception as exc:
+        return _fix_panel(request, db, dl, error=f"NZBGet couldn't unpack it again: {exc}. Download it again instead.")
+    reset_auto_state(dl)
+    reset_for_new_download(dl, dl.nzbget_id)
+    db.commit()
+    log_to_db("INFO", "download", f"#{dl.id}: NZBGet unpacking job {dl.nzbget_id} again with a new password",
+              download_id=dl.id)
+    return _refresh(alert("success", "NZBGet is unpacking the files it already has, with the new password. "
+                                     "The download row follows it."))
+
+
+@router.post("/{download_id}/fix/resend", response_class=HTMLResponse)
+def fix_resend(request: Request, download_id: int, search_term: str = Form(default=""),
+               password: str = Form(default=""), db: Session = Depends(get_db)):
+    dl = _failed(db, download_id)
+    if not dl:
+        return alert("info", _GONE)
+    _keep_fields(dl, search_term, password)
+    db.commit()
+    error = _resend_same_nzb(db, dl)
+    if error:
+        return _fix_panel(request, db, dl, error=error)
+    with_password = f" with password {dl.password}" if dl.password else " without a password"
+    return _refresh(alert("success", f"Downloading the same NZB again (NZBGet job {dl.nzbget_id}){with_password}."))
+
+
+@router.post("/{download_id}/fix/nzbs", response_class=HTMLResponse)
+def fix_find_nzbs(request: Request, download_id: int, search_term: str = Form(default=""),
+                  password: str = Form(default=""), db: Session = Depends(get_db)):
+    """NZBKing and binsearch, searched with the (edited) search word."""
+    dl = _failed(db, download_id)
+    if not dl:
+        return alert("info", _GONE)
+    term = search_term.strip()
+    if not term:
+        return alert("warning", "Type the search word first.")
+    found, notes = find_nzbs(term, every_source=True)
+    meta = dl.parsed_metadata
+    return templates.TemplateResponse("partials/nzb_results.html", {
+        "request": request, "results": found, "notes": notes, "duplicates": [], "failed_hash": dl.nzb_hash or "",
+        "search_term": term, "password": password.strip(), "post_title": dl.post_title or "",
+        "topic_id": dl.topic_id or "", "msg_id": dl.msg_id or "",
+        "book_title": meta.get("title", ""), "book_author": meta.get("author", ""),
+        "book_series": meta.get("series", ""), "book_series_part": meta.get("series_part", ""),
+        "book_narrator": meta.get("narrator", ""), "replace_id": str(dl.id),
+    })
+
+
+@router.post("/{download_id}/fix/indexers", response_class=HTMLResponse)
+def fix_indexers(request: Request, download_id: int, query: str = Form(default=""), db: Session = Depends(get_db)):
+    """Prowlarr, searched with the (edited) title; the chosen result replaces the failed one."""
+    from app.routers.search import _remember
+
+    dl = _failed(db, download_id)
+    if not dl:
+        return alert("info", _GONE)
+    query = query.strip()
+    if len(query) < 2:
+        return alert("warning", "Type a title (and author).")
+    try:
+        results = [r for r in releases.search(db, query) if r["guid"]][:60]
+    except Exception as exc:
+        return alert("danger", f"Prowlarr search failed: {exc}")
+    _remember(results)
+    title, author = book_requests.split_query(query)
+    return templates.TemplateResponse("partials/release_results.html", {
+        "request": request, "results": results, "query": query, "book_title": title, "book_author": author,
+        "blocked": {r["guid"]: releases.can_send(db, r) for r in results}, "replace_id": str(dl.id),
+    })
+
+
+@router.post("/{download_id}/fix/reread", response_class=HTMLResponse)
+def fix_reread(request: Request, download_id: int, db: Session = Depends(get_db)):
+    """Read the forum topic again: every post with hidden content, revealed and saved."""
+    dl = _failed(db, download_id)
+    if not dl:
+        return alert("info", _GONE)
+    scraper = book_requests._scraper(db)
+    if scraper is None or not dl.topic_id:
+        return _fix_panel(request, db, dl, error="abook.link isn't set up in Settings, or this download has no forum post.")
+    try:
+        with scraper.lock:
+            topic = scraper.get_topic(dl.topic_id)
+        for post in topic.get("posts", []):
+            revealed = post.get("revealed")
+            if not (revealed and revealed.get("search_term")) and post.get("has_hidden") and post.get("thank_href"):
+                with scraper.lock:
+                    revealed = scraper.thank_and_get_content(dl.topic_id, post["msg_id"], post["thank_href"])
+            if revealed and revealed.get("search_term"):
+                forum_cache.save_revealed(db, dl.topic_id, post["msg_id"], topic.get("title", ""), revealed)
+    except Exception as exc:
+        return _fix_panel(request, db, dl, error=f"Couldn't read the forum post: {exc}")
+    count = len(forum_cache.revealed_for_topic(db, dl.topic_id))
+    log_to_db("INFO", "download", f"#{dl.id}: forum post read again ({count} post(s) with a search word)",
+              download_id=dl.id)
+    return _fix_panel(request, db, dl, notice=f"Read the forum post again: {count} post(s) with a search word.")
 
 
 # ── requests ("find and download this book") ─────────────────────────────────

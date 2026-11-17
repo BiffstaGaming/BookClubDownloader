@@ -8,6 +8,7 @@
     <input type="hidden" name="guid" value="{{ r.guid }}" />
     <input type="hidden" name="book_title" value="{{ book_title }}" />
     <input type="hidden" name="book_author" value="{{ book_author }}" />
+    {% if replace_id %}<input type="hidden" name="replace_id" value="{{ replace_id }}" />{% endif %}
     <div class="d-flex gap-2 align-items-start">
       <div class="flex-grow-1" style="min-width:0;">
         <div class="fw-semibold text-break">{{ r.title }}</div>
@@ -30,7 +31,7 @@
       {% else %}
       <button type="submit" class="btn bc-btn-sm-primary text-nowrap">
         <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
-        <i class="bi bi-send me-1"></i>Send
+        <i class="bi bi-send me-1"></i>{{ "Use this" if replace_id else "Send" }}
       </button>
       {% endif %}
     </div>

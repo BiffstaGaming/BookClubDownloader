@@ -139,8 +139,8 @@
 
 {% macro actions(dl, target, logs_link=True) %}
 {% if dl.status == "failed" %}
-  {% if dl.nzb_hash and not dl.is_torrent %}{{ row_button("/downloads/" ~ dl.id ~ "/retry-download", "arrow-repeat", "Retry", target, cls="bc-btn-sm-primary", title="Send the same NZB to NZBGet again") }}{% endif %}
-  {% if dl.search_term %}{{ panel_button("/downloads/" ~ dl.id ~ "/alternatives", "search", "Other NZB", cls="bc-btn-outline btn-sm", title="Search for a different NZB") }}{% endif %}
+  {{ panel_button("/downloads/" ~ dl.id ~ "/fix", "wrench-adjustable", "Fix & retry", title="Change the password, search word or NZB and try again") }}
+  {% if dl.nzb_hash and not dl.is_torrent %}{{ row_button("/downloads/" ~ dl.id ~ "/retry-download", "arrow-repeat", "Retry", target, cls="bc-btn-outline btn-sm", title="Send the same NZB to NZBGet again, unchanged") }}{% endif %}
 {% elif dl.m4b_status == "queued" %}
   {{ row_button("/downloads/" ~ dl.id ~ "/reset-conversion", "x-circle", "Dequeue", target, confirm="Remove this conversion from the queue?", title="Remove from queue") }}
 {% elif dl.m4b_status == "converting" %}

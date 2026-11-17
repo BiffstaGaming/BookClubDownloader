@@ -80,6 +80,51 @@ def send_release(db, release: dict, book: dict | None = None, requested_by: str 
     return dl
 
 
+def replace_with_release(db, dl: Download, release: dict) -> Download:
+    """
+    A failed download tries again with an indexer result instead: the same row
+    follows the new NZBGet job or torrent. Raises like send_release.
+    """
+    from app.services.pipeline import reset_auto_state, reset_for_new_download  # the pipeline imports this module
+
+    problem = can_send(db, release)
+    if problem:
+        raise NzbError(problem) if release.get("protocol") != "torrent" else QbitError(problem)
+    name = dl.nzb_name or library.sanitize_filename(release.get("title") or "download")
+    url = release.get("download_url") or ""
+    if dl.is_torrent and qbit_configured(db):
+        # The failed torrent still carries this row's tag: the poller must follow only the new one.
+        qbit_client(db).remove_tag(tag_for(dl.id))
+    if release.get("protocol") != "torrent":
+        content = fetch_nzb("prowlarr", release.get("guid", ""), release.get("title", ""), url=url)
+        job_id = submit_to_nzbget(db, content, name, force=True)
+        dl.client, dl.torrent_hash = None, None
+    else:
+        magnet, torrent = release.get("magnet_url") or "", None
+        if not magnet:
+            magnet, torrent = fetch_torrent(url)
+        qbit_client(db).add(tag_for(dl.id), urls=magnet, torrent=torrent, category=get_setting(db, "qbit_category"))
+        job_id = None
+        dl.client, dl.torrent_hash = "qbittorrent", None
+    reset_auto_state(dl)
+    meta = dl.parsed_metadata
+    for key in ("match_confidence", "input_path", "nzb_retries", "download_url"):
+        meta.pop(key, None)
+    if release.get("protocol") != "torrent":
+        meta["download_url"] = url
+    dl.set_metadata(meta)
+    dl.nzb_name = name
+    dl.nzb_hash = (release.get("guid") or "")[:500] or None
+    dl.nzb_source, dl.nzb_title = "prowlarr", release.get("title") or ""
+    dl.indexer = release.get("indexer") or None
+    reset_for_new_download(dl, job_id)
+    db.commit()
+    where = "qBittorrent" if dl.is_torrent else f"NZBGet (job {job_id})"
+    log_to_db("INFO", "download", f"#{dl.id}: trying '{release.get('title')}' from {dl.indexer or 'Prowlarr'} "
+              f"instead — sent to {where}", download_id=dl.id)
+    return dl
+
+
 def search(db, query: str) -> list[dict]:
     """Prowlarr results for a free-text search, best first."""
     from app.services.book_requests import split_query

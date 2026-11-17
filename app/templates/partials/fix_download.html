@@ -1,0 +1,132 @@
+{# "Fix & retry" for a failed download: each step it went through, editable, with a way to run it again.
+   The changed search word / password travel with every action (the buttons sit inside #fix-form). #}
+{% set err = (dl.error_message or "") | lower %}
+{% set password_problem = "password" in err or "unpack" in err %}
+{% set nzb_problem = "articles" in err or "damaged" in err or "repair" in err or "expired" in err or "valid nzb" in err %}
+<div class="bc-card step-card">
+  <div class="bc-card-header d-flex align-items-center gap-3">
+    <i class="bi bi-wrench-adjustable text-accent fs-5"></i>
+    <span>Fix &amp; retry: <strong>{{ dl.display_title }}</strong></span>
+    <button type="button" class="btn bc-btn-outline btn-sm ms-auto" title="Close" aria-label="Close"
+            onclick="document.getElementById('convert-panel').innerHTML=''">
+      <i class="bi bi-x-lg"></i>
+    </button>
+  </div>
+  <div class="bc-card-body">
+    {% if dl.error_message %}
+    <div class="alert alert-danger py-2 mb-3">
+      <i class="bi bi-x-circle-fill me-2"></i><strong>What went wrong:</strong> {{ dl.error_message }}
+      {% if password_problem %}
+      <div class="small mt-1">Usually the password. Check it against the forum post below, then <strong>Unpack again</strong>:
+        NZBGet reuses the files it already downloaded.</div>
+      {% elif nzb_problem %}
+      <div class="small mt-1">This upload is incomplete. <strong>Find other NZBs</strong> for the same search word, or search your indexers.</div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if notice %}<div class="alert alert-success py-2 mb-3"><i class="bi bi-check-circle-fill me-2"></i>{{ notice }}</div>{% endif %}
+    {% if error %}<div class="alert alert-warning py-2 mb-3"><i class="bi bi-exclamation-triangle-fill me-2"></i>{{ error }}</div>{% endif %}
+
+    {# ── 1. the forum post ── #}
+    {% if dl.topic_id %}
+    <div class="fw-semibold mb-2"><span class="step-badge me-2">1</span>Forum post</div>
+    <div class="small text-muted mb-2">
+      {{ dl.post_title or ("Topic " ~ dl.topic_id) }}
+      {% if forum_url %}<a href="{{ forum_url }}?topic={{ dl.topic_id }}" target="_blank" rel="noopener" class="ms-1">Open on the forum <i class="bi bi-box-arrow-up-right"></i></a>{% endif %}
+    </div>
+    {% if posts %}
+    <div class="d-grid gap-2 mb-2">
+      {% for p in posts %}
+      {% set in_use = p.search_term == dl.search_term and (p.password or "") == (dl.password or "") %}
+      <div class="bc-item py-2">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+          <code class="bc-code">{{ p.search_term }}</code>
+          {% if p.password %}<span class="bc-password-badge"><i class="bi bi-key-fill me-1"></i>{{ p.password }}</span>
+          {% else %}<span class="small text-muted">no password</span>{% endif %}
+          {% if in_use %}
+          <span class="badge bc-badge-muted ms-auto">In use</span>
+          {% else %}
+          <button type="button" class="btn bc-btn-sm-primary ms-auto" data-term="{{ p.search_term }}" data-pw="{{ p.password or '' }}"
+                  onclick="var f=document.getElementById('fix-form');f.search_term.value=this.dataset.term;f.password.value=this.dataset.pw;f.search_term.focus();">
+            <i class="bi bi-arrow-down-circle me-1"></i>Use these
+          </button>
+          {% endif %}
+        </div>
+        {% if p.raw_text %}
+        <details class="mt-1"><summary class="small text-muted">The post's hidden text</summary>
+          <pre class="bc-raw-text mb-0 mt-1" style="max-height:200px;overflow-y:auto;font-size:0.75rem;">{{ p.raw_text }}</pre>
+        </details>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="small text-muted mb-2">BookClub hasn't saved what this post revealed.</div>
+    {% endif %}
+    {% if forum_ready %}
+    <button type="button" class="btn bc-btn-outline btn-sm mb-3" hx-post="/downloads/{{ dl.id }}/fix/reread"
+            hx-target="#convert-panel" hx-swap="innerHTML" title="Fetch the topic again and read every post's hidden text">
+      <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+      <i class="bi bi-arrow-clockwise me-1"></i>Read the post on the forum again
+    </button>
+    {% endif %}
+    {% endif %}
+
+    {# ── 2. search word, password and NZB ── #}
+    <div class="fw-semibold mb-2 mt-1"><span class="step-badge me-2">{{ 2 if dl.topic_id else 1 }}</span>Search word, password &amp; NZB</div>
+    <form id="fix-form" onsubmit="return false;">
+      <div class="row g-2">
+        <div class="col-12 col-md-7">
+          <label class="form-label small text-muted mb-1" for="fix-term">Search word (what NZBKing / binsearch look for)</label>
+          <input type="text" id="fix-term" name="search_term" class="form-control bc-input" value="{{ dl.search_term or '' }}" autocomplete="off" />
+        </div>
+        <div class="col-12 col-md-5">
+          <label class="form-label small text-muted mb-1" for="fix-password">Unpack password (empty = none)</label>
+          <input type="text" id="fix-password" name="password" class="form-control bc-input" value="{{ dl.password or '' }}" autocomplete="off" />
+        </div>
+      </div>
+      {% if dl.nzb_title or dl.nzb_hash %}
+      <div class="small text-muted mt-2"><i class="bi bi-file-earmark-zip me-1"></i>NZB that failed: {{ dl.nzb_title or dl.nzb_hash }}{% if dl.nzb_source %} ({{ dl.nzb_source }}){% endif %}</div>
+      {% endif %}
+      <div class="d-flex flex-wrap gap-2 mt-2">
+        {% if dl.nzbget_id and not dl.is_torrent and nzbget_ready %}
+        <button type="button" class="btn {{ 'bc-btn-sm-primary' if password_problem else 'bc-btn-outline btn-sm' }}"
+                hx-post="/downloads/{{ dl.id }}/fix/unpack" hx-target="#convert-panel" hx-swap="innerHTML"
+                title="NZBGet unpacks the files it already downloaded again, with this password (no re-download)">
+          <i class="bi bi-unlock me-1"></i>Unpack again
+        </button>
+        {% endif %}
+        {% if can_resend and nzbget_ready %}
+        <button type="button" class="btn bc-btn-outline btn-sm" hx-post="/downloads/{{ dl.id }}/fix/resend"
+                hx-target="#convert-panel" hx-swap="innerHTML" title="Download the same NZB again, with this password">
+          <i class="bi bi-arrow-repeat me-1"></i>Download it again
+        </button>
+        {% endif %}
+        <button type="button" class="btn {{ 'bc-btn-sm-primary' if nzb_problem else 'bc-btn-outline btn-sm' }}"
+                hx-post="/downloads/{{ dl.id }}/fix/nzbs" hx-target="#fix-results" hx-swap="innerHTML"
+                title="Search NZBKing and binsearch for this search word">
+          <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+          <i class="bi bi-search me-1"></i>Find other NZBs
+        </button>
+        <button type="button" class="btn bc-btn-outline btn-sm" hx-post="/downloads/{{ dl.id }}/fix/save"
+                hx-target="#convert-panel" hx-swap="innerHTML" title="Keep these without retrying yet">
+          <i class="bi bi-floppy me-1"></i>Save only
+        </button>
+      </div>
+    </form>
+
+    {# ── 3. other indexers ── #}
+    {% if prowlarr_ready %}
+    <div class="fw-semibold mb-2 mt-3"><span class="step-badge me-2">{{ 3 if dl.topic_id else 2 }}</span>Your indexers (Prowlarr)</div>
+    <form class="d-flex gap-2" hx-post="/downloads/{{ dl.id }}/fix/indexers" hx-target="#fix-results" hx-swap="innerHTML">
+      <input type="text" name="query" class="form-control bc-input" value="{{ indexer_query }}" placeholder="Title and author" autocomplete="off" />
+      <button type="submit" class="btn bc-btn-outline btn-sm text-nowrap">
+        <span class="spinner-border spinner-border-sm htmx-indicator me-1" role="status"></span>
+        <i class="bi bi-hdd-network me-1"></i>Search
+      </button>
+    </form>
+    {% endif %}
+
+    <div id="fix-results" class="mt-3" data-bc-clear-when-empty></div>
+  </div>
+</div>

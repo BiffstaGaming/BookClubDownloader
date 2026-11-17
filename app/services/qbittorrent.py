@@ -75,6 +75,12 @@ class QbitClient:
         if answer and answer != "Ok.":
             raise QbitError(f"qBittorrent did not add the torrent ({answer[:80]})")
 
+    def remove_tag(self, tag: str) -> None:
+        """Take `tag` off every torrent that has it (so a new torrent can be followed by it)."""
+        hashes = [t["hash"] for t in self.torrents(tag=tag) if t.get("hash")]
+        if hashes:
+            self._request("POST", "/api/v2/torrents/removeTags", data={"hashes": "|".join(hashes), "tags": tag})
+
     def torrents(self, tag: str = "", hashes: list[str] | None = None) -> list[dict]:
         params = {}
         if tag:

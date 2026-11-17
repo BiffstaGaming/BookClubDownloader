@@ -44,6 +44,7 @@
           <tr>
             <td>
               <span class="fw-semibold text-primary-light">{{ nzb.title }}</span>
+              {% if failed_hash and nzb.nzb_hash == failed_hash %}<span class="badge bc-badge-danger ms-1" title="This is the NZB that failed">Failed before</span>{% endif %}
               {% if nzb.detail_url %}
               <a
                 href="{{ nzb.detail_url }}"
