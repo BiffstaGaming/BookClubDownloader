@@ -21,8 +21,19 @@ AUDIBLE_RESULT = {
 def test_parse_nzb_name():
     assert parse_nzb_name("Book Club - [SPOT] Rob Jones - Hunter06 - The Vatican Conspiracy (Colin Mace)") == \
         ("The Vatican Conspiracy", "Rob Jones")
-    assert parse_nzb_name("Author - Title") == ("Title", "")
+    assert parse_nzb_name("Author - Title") == ("Title", "Author")
     assert parse_nzb_name("Just A Title") == ("Just A Title", "")
+    assert parse_nzb_name("Book Club - Just A Title") == ("Just A Title", "")
+
+
+def test_parse_forum_topic_titles():
+    # Forum topics have no "Book Club - " in front: the author is the first part, not the series.
+    assert parse_nzb_name("Peter V. Brett - The Demon Cycle 3 - The Daylight War (2013)") == \
+        ("The Daylight War", "Peter V. Brett")
+    assert parse_nzb_name("Rina Kent - Legacy of Gods 01 - God of Malice (2022)") == ("God of Malice", "Rina Kent")
+    assert parse_nzb_name("[SPOT] Eleanor Herman - [Blood of Gods & Royals 01] - Legacy of Kings (2015)") == \
+        ("Legacy of Kings", "Eleanor Herman")
+    assert parse_nzb_name("Re: Andy Weir - Project Hail Mary (Ray Porter/2021)") == ("Project Hail Mary", "Andy Weir")
 
 
 def test_confidence():

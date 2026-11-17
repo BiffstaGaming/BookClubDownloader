@@ -46,14 +46,14 @@ def test_audible_outage_is_retried_not_sent_for_review(db, settings, tmp_path, c
     assert any(e["event"] == "needs_review" for e in clean_db)
 
 
-def test_series_in_the_author_slot_is_not_searched_as_the_author(db, settings, tmp_path):
+def test_forum_title_is_searched_with_its_author_not_its_series(db, settings, tmp_path):
     src = _book_folder(tmp_path)
     settings(abs_url="http://abs", abs_token="t")
     dl_id = make_download(db, status="downloaded", download_path=str(src),
                           post_title="Rob Jones - Hunter Files 06 - The Vatican Conspiracy")
     run(Pipeline().auto_process(dl_id))
     searches = [c for c in FakeAbs.calls if c[0] == "search_books"]
-    assert searches[0][1:3] == ("The Vatican Conspiracy", "")
+    assert searches[0][1:3] == ("The Vatican Conspiracy", "Rob Jones")
     assert reload(db, dl_id).m4b_status == "queued"
 
 

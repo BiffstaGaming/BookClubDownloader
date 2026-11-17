@@ -3,26 +3,26 @@ import difflib
 import re
 
 
+_BOOK_CLUB_PREFIX = re.compile(r"^(?:re:\s*)?book\s*club$", re.I)
+
+
 def parse_nzb_name(name: str) -> tuple[str, str]:
     """
-    Parse the forum NZB naming convention:
-      "Book Club - [FLAG] Author - Series## - BookTitle (Narrator/Year)"
-    Returns (title, author).
-    Strips any trailing parenthetical (year OR narrator name).
-    Strips bracketed flags like [SPOT] from the author segment.
+    (title, author) from a forum topic title or an NZB name built from one:
+      "[FLAG] Author - Series## - BookTitle (Narrator/Year)"               forum topic
+      "Book Club - [FLAG] Author - Series## - BookTitle (Narrator/Year)"   NZB name
+    The author is always the first part after the optional "Book Club" prefix,
+    the title the last. Strips the trailing parenthetical (year or narrator)
+    and bracketed flags like [SPOT] in front of the author.
     """
     name = re.sub(r'\s*\([^)]+\)\s*$', '', name or "").strip()
-    parts = [p.strip() for p in name.split(' - ')]
-    if len(parts) >= 3:
-        title  = parts[-1]
-        author = re.sub(r'^\[[^\]]+\]\s*', '', parts[1]).strip()
-    elif len(parts) == 2:
-        title  = parts[-1]
-        author = ""
-    else:
-        title  = name
-        author = ""
-    return title, author
+    parts = [p.strip() for p in name.split(' - ') if p.strip()]
+    if parts and _BOOK_CLUB_PREFIX.match(parts[0]):
+        parts = parts[1:]
+    if len(parts) < 2:
+        return (parts[0] if parts else name), ""
+    author = re.sub(r'^(?:re:\s*)?(?:\[[^\]]+\]\s*)*', '', parts[0], flags=re.I).strip()
+    return parts[-1], author
 
 
 def normalize(s: str) -> str:
